@@ -164,11 +164,34 @@ v0 vs v3 (50KB 학습 / 4KB 발췌, 4권):
 인코드 평균 **37.9× 가속**. 정수승·재결합의 미세 오차가 alpha-blend·scale 양자화에 흡수돼
 양자화된 cum 이 v0 와 완전히 일치했다.
 
+## v3 단계 2 — open addressing + bloom 16M (`make v3-scale`)
+
+chained hash(8M entries / 256K buckets → 평균 체인 32) 를 선형 탐사 open addressing 으로 교체:
+BtEntry 슬롯 16M, CtxEntry 슬롯 8M (load ≤0.5), bloom 4M→16M bit. 같은 entry/freq 를 찾으므로
+**분포는 v0 와 여전히 비트 동일** (`make v3-compare` PASS, ratioΔ 0.00%). context 탐색의 체인
+워크도 사라져 인코드 가속이 37.9× → **74.2×** 로 추가 향상.
+
+대규모 학습 스케일링 (moby_dick, 4KB 발췌):
+
+| 학습량 | v0 학습 | v3 학습 | v3 인코드 | v3 압축비 | v3 entries | lossless |
+|--------|---------|---------|-----------|-----------|------------|----------|
+| 50 KB | 0.415s | 0.308s | 0.065s | 2.35× | 989,211 | yes |
+| 200 KB | 7.169s | 1.450s | 0.078s | 2.66× | 3,760,109 | yes |
+| 500 KB | —(skip) | 5.226s | 0.082s | 2.84× | 8,388,608 | yes |
+| 1000 KB | —(skip) | 7.628s | 0.086s | 2.65× | 8,388,608 | yes |
+
+v0 는 50K→200K 에서 0.42s→7.17s (4× 데이터에 ~17× 시간 = O(n²) 확인). v3 는 거의 선형
+(200K 1.45s, 500K 5.2s, 1M 7.6s) 으로 **500K/1M 학습이 초 단위로 가능** (보고서의 "500K 시간 폭발" 해소).
+
+**남은 병목**: `v3_entries` 가 500K 부터 BT_POOL 상한 8M 에 포화 → 더 큰 학습엔 pool 확대 필요
+(1M 압축비가 500K 보다 낮은 것도 pool 포화 + 발췌 위치 차이 영향). pool 크기 조정은 후속 과제.
+
 ### 결정 요약
 
 - **v2 (시계계층)**: 폐기.
-- **v3 (정수 BT)**: 단계별 진행. **단계 1 (distribution caching) 완료** — v0 비트동일, 37.9× 가속.
-  다음: (2) open addressing + bloom 16M, (3) 정수 LUT, (4) aux 정수화 + MCU 빌드.
+- **v3 (정수 BT)**: 단계별 진행. **단계 1·2 완료** — distribution caching + open addressing,
+  v0 비트동일, 74.2× 가속, 1M 학습 초 단위. 다음: (3) 정수 LUT, (4) aux 정수화 + MCU 빌드.
+  (남은 병목: BT_POOL 8M 포화 — pool 확대 검토.)
 - **v4 (보조채널)**: distribution blend 방식 `AuxChannel` 라이브러리. 4채널 **측정 완료** —
   단독 +0.6~0.8%, combo **+2.60%** (무손실). 다음: v3 정수화와 결합.
 
