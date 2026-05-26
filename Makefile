@@ -22,6 +22,10 @@ V4_DIR  := src/v4_aux_channel
 V4_INC  := -I$(V4_DIR)
 V4_SRC  := $(V4_DIR)/aux.c
 
+V5_DIR  := src/v5_mmap_prior
+V5_INC  := -I$(V5_DIR)
+V5_SRC  := $(V5_DIR)/bcb_prior.c
+
 BUILD   := build
 CORPUS  := tests/corpus/pride_and_prejudice.txt
 
@@ -35,15 +39,15 @@ MSG_SIZES ?= 64,128,256,512,1024,2048,4096
 MSG_BYTES ?= 400000
 MSG_SAMPLES ?= 24
 
-.PHONY: all test bench clean msgbench msgbench-md msgbench-check
+.PHONY: all test bench clean msgbench msgbench-md msgbench-check prior prior-equiv prior-rss
 
 all: $(BUILD)/bcb-cli $(BUILD)/bcb-bench
 
 $(BUILD):
 	mkdir -p $(BUILD)
 
-$(BUILD)/bcb-cli: tools/bcb-cli.c $(V0_SRC) | $(BUILD)
-	$(CC) $(CFLAGS) $(V0_INC) -o $@ $^ $(LDLIBS)
+$(BUILD)/bcb-cli: tools/bcb-cli.c $(V0_SRC) $(V3_SRC) $(V5_SRC) | $(BUILD)
+	$(CC) $(CFLAGS) $(V0_INC) $(V3_INC) $(V5_INC) -o $@ $^ $(LDLIBS)
 
 $(BUILD)/bcb-bench: tools/bcb-bench.c $(V0_SRC) | $(BUILD)
 	$(CC) $(CFLAGS) $(V0_INC) -o $@ $^ $(LDLIBS)
@@ -112,6 +116,38 @@ v3-pool: $(BUILD)/test_v3_pool8 $(BUILD)/test_v3_pool32 $(BUILD)/test_v3_pool64 
 
 bench: $(BUILD)/bcb-bench
 	./$(BUILD)/bcb-bench $(CORPUS)
+
+# ── v5 mmap prior ────────────────────────────────────────
+$(BUILD)/bcb-prior-build: tools/bcb-prior-build.c $(V0_SRC) $(V3_SRC) $(V5_SRC) | $(BUILD)
+	$(CC) $(CFLAGS) $(V0_INC) $(V3_INC) $(V5_INC) -o $@ $^ $(LDLIBS)
+
+$(BUILD)/bcb-prior-test: tools/bcb-prior-test.c $(V0_SRC) $(V3_SRC) $(V5_SRC) | $(BUILD)
+	$(CC) $(CFLAGS) $(V0_INC) $(V3_INC) $(V5_INC) -o $@ $^ $(LDLIBS)
+
+$(BUILD)/bcb-prior-test-mcu: tools/bcb-prior-test.c $(V0_SRC) $(V3_SRC) $(V5_SRC) | $(BUILD)
+	$(CC) $(CFLAGS) -DBCB_MCU $(V0_INC) $(V3_INC) $(V5_INC) -o $@ $^ $(LDLIBS)
+
+PRIOR_TRAIN ?= 50000
+PRIOR_MSG_SIZE ?= 128
+PRIOR_MSGS ?= 500
+
+# 5개 시나리오: in-memory vs mmap 비트 동일 + round-trip 무손실
+prior-equiv: $(BUILD)/bcb-prior-test $(addprefix $(BUILD)/corpus_,$(addsuffix .bin,$(SCENARIOS)))
+	@fail=0; for s in $(SCENARIOS); do \
+	  ./$(BUILD)/bcb-prior-test equiv $(BUILD)/corpus_$$s.bin \
+	    --train-size $(PRIOR_TRAIN) --msg-size $(PRIOR_MSG_SIZE) --msgs $(PRIOR_MSGS) || fail=1; \
+	done; [ $$fail -eq 0 ] || { echo "PRIOR EQUIV FAILED"; exit 1; }
+
+# RAM(in-memory) vs mmap 피크 RSS + 처리량 (http_headers 시나리오, 별도 프로세스)
+prior-rss: $(BUILD)/bcb-prior-build $(BUILD)/bcb-prior-test $(BUILD)/bcb-prior-test-mcu $(BUILD)/corpus_http_headers.bin
+	@C=$(BUILD)/corpus_http_headers.bin; P=$(BUILD)/http.bcb-prior; \
+	./$(BUILD)/bcb-prior-build $$C $$P --train-size $(PRIOR_TRAIN); \
+	ls -l $$P | awk '{printf "prior file: %s bytes\n",$$5}'; \
+	./$(BUILD)/bcb-prior-test     rss-mem  $$C    --train-size $(PRIOR_TRAIN) --msg-size $(PRIOR_MSG_SIZE) --msgs $(PRIOR_MSGS); \
+	./$(BUILD)/bcb-prior-test     rss-mmap $$C $$P --train-size $(PRIOR_TRAIN) --msg-size $(PRIOR_MSG_SIZE) --msgs $(PRIOR_MSGS); \
+	./$(BUILD)/bcb-prior-test-mcu rss-mem  $$C    --train-size $(PRIOR_TRAIN) --msg-size $(PRIOR_MSG_SIZE) --msgs $(PRIOR_MSGS)
+
+prior: prior-equiv prior-rss
 
 # ── 작은 메시지 벤치마크 ─────────────────────────────────
 $(BUILD)/bcb-msgbench: tools/bcb-msgbench.c $(V0_SRC) $(V3_SRC) | $(BUILD)

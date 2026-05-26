@@ -21,3 +21,6 @@ jobs:
 
       - name: Small-message regression (BCB ratios within 2% of baseline)
         run: make msgbench-check
+
+      - name: mmap prior equivalence (in-memory == mmap, bit-identical + lossless)
+        run: make prior-equiv
