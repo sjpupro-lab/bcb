@@ -24,3 +24,6 @@ jobs:
 
       - name: mmap prior equivalence (in-memory == mmap, bit-identical + lossless)
         run: make prior-equiv
+
+      - name: landmark prior round-trip lossless (4 scenarios)
+        run: make landmark-verify

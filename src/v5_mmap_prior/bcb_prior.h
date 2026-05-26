@@ -17,8 +17,17 @@
 #define BCB_PRIOR_H
 
 #include "ce_compress.h"
+#include <stdint.h>
 
 typedef struct BcbPrior BcbPrior;
+
+/* 다음 bcb_prior_save 에 포함할 landmark 표 등록 (NULL/0 이면 landmark 없음).
+ *   n   : context 길이 (bytes)
+ *   k   : landmark 개수
+ *   ctx : k*n 바이트 (context 들)
+ *   cum : k*256 uint16 (각 landmark 의 byte width, 합 = CEC_RC_SCALE)
+ * 인코더/디코더는 hit 시 이 정수 width 를 그대로 써서 비트 동일·무손실. */
+void bcb_prior_set_landmarks(int n, unsigned k, const unsigned char *ctx, const uint16_t *cum);
 
 /* 현재 학습된 btv3 globals 를 path 로 직렬화. 0 ok / -1 실패. */
 int bcb_prior_save(const char *path);
