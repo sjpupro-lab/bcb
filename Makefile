@@ -14,6 +14,10 @@ V1_DIR  := src/v1_symmetric_dist
 V1_INC  := -I$(V1_DIR)
 V1_SRC  := $(V1_DIR)/symdist.c
 
+V4_DIR  := src/v4_aux_channel
+V4_INC  := -I$(V4_DIR)
+V4_SRC  := $(V4_DIR)/aux.c
+
 BUILD   := build
 CORPUS  := tests/corpus/pride_and_prejudice.txt
 
@@ -42,6 +46,13 @@ test: $(BUILD)/test_roundtrip
 # v1 합=1 강제 ablation (v0 vs v1a)
 v1-compare: $(BUILD)/test_v1_compare
 	./$(BUILD)/test_v1_compare $(CORPUS)
+
+$(BUILD)/test_v4_aux: tests/test_v4_aux.c $(V0_SRC) $(V1_SRC) $(V4_SRC) | $(BUILD)
+	$(CC) $(CFLAGS) $(V0_INC) $(V1_INC) $(V4_INC) -o $@ $^ $(LDLIBS)
+
+# v4 byte_type distribution blend ablation (baseline vs +aux, 4권)
+v4-aux: $(BUILD)/test_v4_aux
+	./$(BUILD)/test_v4_aux
 
 bench: $(BUILD)/bcb-bench
 	./$(BUILD)/bcb-bench $(CORPUS)

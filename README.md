@@ -63,6 +63,8 @@ Pride and Prejudice 에서 4KB 발췌를 압축. BCB 는 발췌 직전의 코퍼
 make all          # build/bcb-cli, build/bcb-bench
 make test         # v0 baseline 무손실 round-trip 검증
 make bench        # gzip/bz2/lzma 와 비교 벤치마크
+make v1-compare   # v0 vs v1a (합=1) ablation
+make v4-aux       # v1a vs +byte_type blend ablation (4권)
 ```
 
 요구사항: C99 컴파일러 + libm (`-lm`). 외부 라이브러리 의존성 없음.
