@@ -250,12 +250,31 @@ diverse ~11.2MB 코퍼스(`tests/corpus/large.txt`, `fetch_large.sh` 로 생성)
 - 고정 64M 사전할당은 4.35GB 로 비효율(미사용분 포함). entry 수에 비례하는
   **동적 할당**이 다음 단계(확장 2)의 동기.
 
+## BT_POOL 확장 2 — 동적 할당 (기본 모드)
+
+작게 시작(64K)해 `realloc` 로 2배씩 성장 + slot rehash(amortized O(1)). 상한 없음.
+세 모드: **동적(기본)** / 고정(`-DBCB_POOL_BITS=N`) / MCU 소형(`-DBCB_MCU`). MCU·고정은 성장 안 함.
+
+- **회귀**: 비포화 학습에선 동적 = 고정과 **비트 동일** (`make v3-compare` −0.13%, 4권 무손실).
+  같은 entry/freq 를 찾으므로 slot 테이블 크기와 무관하게 분포가 같다.
+- **메모리 비례화** (`make meminfo`, 30KB 학습):
+
+| 빌드 | footprint(30KB 학습 후) | 압축비 | lossless |
+|------|--------------------------|--------|----------|
+| 고정 8M (이전) | 546 MB | 4.55× | yes |
+| **동적** | **94.5 MB** | 4.55× | yes |
+| MCU | 3.56 MB | 3.06× | yes |
+
+30KB 학습은 entry ~62만 개 → 동적은 pool 을 36MB 까지만 키워 **546MB→94.5MB (5.8× 절감)**,
+압축비·무손실 동일. 대규모 학습에선 고정 64M 상한을 넘겨 성장(포화 없음) → 10MB 학습 압축비가
+고정 64M(3.04×, 포화) 이상으로 유지된다. (대규모 동적 측정 `make v3-pool` 의 `dynamic` 행 참조.)
+
 ### 결정 요약
 
 - **v2 (시계계층)**: 폐기.
-- **v3 (정수 BT)**: **단계 1~4 완료** + **pool 확장 진행**. distribution caching + open addressing +
-  정수 hot path + libm 제거 + MCU. pool 크기 조정 가능(`-DBCB_POOL_BITS`): 8M→64M 에서 4MB 학습
-  2.80→3.06×. 다음: 동적 할당(확장 2). MCU 3.56MB.
+- **v3 (정수 BT)**: **단계 1~4 + pool 확장 1·2 완료**. distribution caching + open addressing +
+  정수 hot path + libm 제거 + MCU. pool 은 동적(기본)/고정(`-DBCB_POOL_BITS`)/MCU 3모드.
+  8M→64M 4MB 학습 2.80→3.06×; 동적은 메모리 비례(30KB 546→94.5MB) + 포화 없음. MCU 3.56MB.
 - **v4 (보조채널)**: distribution blend `AuxChannel` 라이브러리, 정수화 완료. 정수 v3 파이프라인에서
   단독 +0.95~1.11%, **combo +2.94%** (무손실).
 
