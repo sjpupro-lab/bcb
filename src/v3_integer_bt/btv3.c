@@ -308,6 +308,23 @@ void bt_v3_set_window(const unsigned char *ctx, int len){
     memcpy(g_window, ctx, (size_t)len);
     g_win_len=len;
 }
+int bt_v3_window(const unsigned char **out){ if(out) *out=g_window; return g_win_len; }
+
+unsigned long bt_v3_ctx_pool_count(void){ return g_ctx_used; }
+int bt_v3_ctx_at(unsigned long i, unsigned char *ctx_out, int *len_out,
+                 unsigned *total_out, unsigned *freq256){
+    if(i>=g_ctx_used) return -1;
+    CtxEntry *cc=&g_ctx_pool[i];
+    if(ctx_out) memcpy(ctx_out, cc->ctx, cc->ctx_len);
+    if(len_out) *len_out=cc->ctx_len;
+    if(total_out) *total_out=cc->total_freq;
+    if(freq256){
+        memset(freq256,0,256*sizeof(unsigned));
+        for(int idx=cc->first_entry; idx>=0; idx=g_pool[idx].ctx_next)
+            freq256[g_pool[idx].next_byte]=g_pool[idx].freq;
+    }
+    return 0;
+}
 
 /* 정수 전용 분포 계산. 레벨마다:
  *   pass A — 활성 context 수집 + log2_w 최대값(max_log2) 탐색

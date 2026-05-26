@@ -53,6 +53,14 @@ typedef struct {
 void bt_v3_freeze(int on);              /* train 시 pool 갱신 끄기/켜기 */
 void bt_v3_reset_window(void);          /* context window 비우기 (메시지 독립 인코딩) */
 void bt_v3_set_window(const unsigned char *ctx, int len);  /* window 를 주어진 context 로 설정 */
+int  bt_v3_window(const unsigned char **out);  /* 현재 window: 반환 길이, *out=window 시작 */
+
+/* ── landmark 추출용 context 열람 (학습된 상태에서) ──────── */
+unsigned long bt_v3_ctx_pool_count(void);
+/* i 번째 CtxEntry: ctx_out(>=BT_MAX_DEPTH), *len, *total, freq256(256개, 미관측 0) 채움.
+ * 반환 0 ok / -1 범위초과. */
+int bt_v3_ctx_at(unsigned long i, unsigned char *ctx_out, int *len_out,
+                 unsigned *total_out, unsigned *freq256);
 void bt_v3_export(BtV3Snapshot *s);     /* 학습 후: 현재 globals 포인터/크기 채움 */
 int  bt_v3_attach(const BtV3Snapshot *s); /* globals 를 외부 읽기전용 버퍼로; freeze; 0 ok / -1 서명 불일치 */
 void bt_v3_detach(void);                /* attach 해제 (외부 버퍼 free 안 함) */

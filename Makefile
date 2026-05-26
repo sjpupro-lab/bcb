@@ -39,7 +39,7 @@ MSG_SIZES ?= 64,128,256,512,1024,2048,4096
 MSG_BYTES ?= 400000
 MSG_SAMPLES ?= 24
 
-.PHONY: all test bench clean msgbench msgbench-md msgbench-check prior prior-equiv prior-rss hpack hpack-docs landmark
+.PHONY: all test bench clean msgbench msgbench-md msgbench-check prior prior-equiv prior-rss hpack hpack-docs landmark landmark-verify
 
 all: $(BUILD)/bcb-cli $(BUILD)/bcb-bench
 
@@ -173,6 +173,21 @@ landmark: $(BUILD)/bcb-landmark $(addprefix $(BUILD)/corpus_,$(addsuffix .bin,$(
 	  ./$(BUILD)/bcb-landmark --corpus $(BUILD)/corpus_$$s.bin --train-size $(MSG_TRAIN) \
 	    --n $(LM_N) --md --label $$s; \
 	done
+
+# PR-2 검증: landmark prior 무손실 + 압축비 (base vs landmark), 4 시나리오.
+LM_K ?= 512
+LM_MSG ?= 128
+LM_VERIFY_SCN := http_headers mqtt_messages iot_packets log_lines
+landmark-verify: $(BUILD)/bcb-prior-build $(BUILD)/bcb-blockbench $(addprefix $(BUILD)/corpus_,$(addsuffix .bin,$(LM_VERIFY_SCN)))
+	@fail=0; for s in $(LM_VERIFY_SCN); do \
+	  C=$(BUILD)/corpus_$$s.bin; B=$(BUILD)/$$s.blocks; \
+	  python3 $(SCN)/chunk.py $$C --train-size $(MSG_TRAIN) --size $(LM_MSG) --out $$B >/dev/null; \
+	  ./$(BUILD)/bcb-prior-build $$C $(BUILD)/$$s.base.prior --train-size $(MSG_TRAIN) 2>/dev/null; \
+	  ./$(BUILD)/bcb-prior-build $$C $(BUILD)/$$s.lm.prior   --train-size $(MSG_TRAIN) --landmark-n $(LM_N) --landmark-k $(LM_K) 2>/dev/null; \
+	  printf "%-15s base: " $$s; ./$(BUILD)/bcb-blockbench --prior $(BUILD)/$$s.base.prior --blocks $$B >/dev/null 2>/tmp/lm_base; cat /tmp/lm_base; \
+	  printf "%-15s lm:   " $$s; ./$(BUILD)/bcb-blockbench --prior $(BUILD)/$$s.lm.prior   --blocks $$B >/dev/null 2>/tmp/lm_lm;   cat /tmp/lm_lm; \
+	  grep -q 'lossless=yes' /tmp/lm_lm || fail=1; \
+	done; [ $$fail -eq 0 ] || { echo "LANDMARK VERIFY FAILED (lossless)"; exit 1; }
 
 # ── 작은 메시지 벤치마크 ─────────────────────────────────
 $(BUILD)/bcb-msgbench: tools/bcb-msgbench.c $(V0_SRC) $(V3_SRC) | $(BUILD)
