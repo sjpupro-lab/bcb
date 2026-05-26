@@ -111,9 +111,9 @@ BT pool 크기는 압축비와 메모리를 가른다. 세 가지 빌드 모드:
 | 고정 | `-DBCB_POOL_BITS=N` | 2^N 고정 | 크기·압축비 비교 (8M/32M/64M) |
 | MCU | `-DBCB_MCU` | 소형 고정(~3.56MB) | ESP32/RP2040 |
 
-고정 pool 비교(4KB 발췌, diverse 코퍼스): 4MB 학습에서 8M→32M→64M 가 2.80→2.96→**3.06×**.
-diverse 텍스트 4MB 가 BT entry 약 62M 개를 만들어 작은 pool 은 포화한다 → 동적 할당으로 해소.
-상세: `docs/mcu.md`, `docs/benchmarks.md`.
+대규모 학습 비교(4KB 발췌, diverse 코퍼스): 4MB 학습 8M→32M→64M = 2.80→2.96→3.06×.
+**동적 모드는 포화 없이 성장** → 10MB 학습에서 **3.43×** (고정 64M 3.04×, 포화 대비 큰 향상).
+또 30KB 학습 메모리는 고정 546MB → 동적 94.5MB 로 줄어든다. 상세: `docs/benchmarks.md`, `docs/mcu.md`.
 
 ---
 
