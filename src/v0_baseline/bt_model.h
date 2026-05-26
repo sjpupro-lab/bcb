@@ -1,3 +1,7 @@
+/* BCB — Binary Compression by BT
+ * Copyright (c) 2026 호시 <jahyag@gmail.com>
+ * Licensed under the MIT License. See LICENSE.
+ */
 #ifndef BT_MODEL_V4_H
 #define BT_MODEL_V4_H
 #include <stdint.h>
