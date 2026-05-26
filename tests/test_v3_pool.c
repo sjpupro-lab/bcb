@@ -34,10 +34,10 @@ int main(int argc, char **argv) {
     size_t len = 0; uint8_t *c = slurp(path, &len);
     if (!c) { printf("[skip] %s 없음 — 'sh tests/corpus/fetch_large.sh' 로 생성\n", path); return 0; }
 
-    BtV3Mem m; bt_v3_footprint(&m);
-    printf("BT_POOL=%lu entries, footprint=%.0f MB, corpus=%.1f MB\n\n",
-           m.bt_pool_n, m.total/(1024.0*1024.0), len/(1024.0*1024.0));
-    printf("  %-8s %9s %12s %5s %8s %s\n", "train", "train_t", "entries", "full", "ratio", "lossless");
+    BtV3Mem m0; bt_v3_footprint(&m0);   /* init 전: 시작 용량 */
+    printf("시작 pool=%lu entries, corpus=%.1f MB\n\n", m0.bt_pool_n, len/(1024.0*1024.0));
+    printf("  %-8s %9s %12s %5s %9s %8s %s\n",
+           "train", "train_t", "entries", "full", "peak_MB", "ratio", "lossless");
 
     /* 학습량 sweep: argv 또는 기본 {4M, 10M} */
     size_t def[] = { 4000000, 10000000 };
@@ -53,7 +53,8 @@ int main(int argc, char **argv) {
         for (size_t k = 0; k < tl; k++) bt.train(c[k], bt.user);
         double tt = (double)(clock()-t)/CLOCKS_PER_SEC;
         unsigned long ent = bt_v3_entries();
-        int full = (ent >= m.bt_pool_n);
+        BtV3Mem mp; bt_v3_footprint(&mp);       /* 학습 후 peak 용량 */
+        int full = (ent >= mp.bt_pool_n);
 
         CecEncoder *e = cec_enc_new(&bt);
         for (size_t k = 0; k < EX_LEN; k++) cec_enc_byte(e, ex[k]);
@@ -67,8 +68,9 @@ int main(int argc, char **argv) {
         free(dec); free(cmp);
 
         char lbl[24]; snprintf(lbl, sizeof(lbl), "%zuMB", tl/1000000);
-        printf("  %-8s %8.2fs %12lu %5s %7.2fx %s\n",
-               lbl, tt, ent, full?"YES":"no", cl?(double)EX_LEN/cl:0, ok?"yes":"NO");
+        printf("  %-8s %8.2fs %12lu %5s %8.0f %7.2fx %s\n",
+               lbl, tt, ent, full?"YES":"no", mp.total/(1024.0*1024.0),
+               cl?(double)EX_LEN/cl:0, ok?"yes":"NO");
     }
     free(c);
     printf("\n%s\n", all_ok ? "all lossless" : "LOSSLESS BROKEN");

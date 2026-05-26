@@ -21,34 +21,42 @@
 #include "btv3.h"
 /* 단계 4: libm 제거 — LUT 는 정수 fixed-point 로 생성 (no <math.h>). */
 
-/* ── 크기 설정: 데스크톱 기본 vs MCU(-DBCB_MCU) ──────────────
- * MCU: pool 64K(~2MB) / bloom 256K bit / ctx 16K / LUT 4K — ESP32·RP2040 대응. */
+/* ── 크기 설정 — 3 모드 ─────────────────────────────────────
+ *   MCU(-DBCB_MCU)      : 소형 고정, 성장 없음 (ESP32·RP2040).
+ *   고정(-DBCB_POOL_BITS): 2^N 고정, 성장 없음 (pool 확장 1 비교용).
+ *   기본(매크로 없음)    : 동적 — 작게 시작해 realloc 으로 성장(상한 없음).
+ * POOL_CAP0/…0 은 시작(또는 고정) 용량. */
 #ifdef BCB_MCU
-  #define BT_POOL     (64*1024)
-  #define BT_SLOTS    (1<<17)         /* 128K (load ≤0.5) */
-  #define BLOOM_BITS  (1<<18)         /* 256K bit */
-  #define CTX_POOL    (16*1024)
-  #define CTX_SLOTS   (1<<15)         /* 32K */
-  #define PRES_BITS   12              /* CONF_LOG2 4096 entries */
-  #define EXP2_FB     12              /* EXP2_FRAC 4096 entries */
+  #define BTV3_DYNAMIC 0
+  #define POOL_CAP0   (64*1024UL)
+  #define BT_NSLOTS0  (1UL<<17)         /* 128K (load ≤0.5) */
+  #define CTX_CAP0    (16*1024UL)
+  #define CTX_NSLOTS0 (1UL<<15)         /* 32K */
+  #define BLOOM_BITS  (1<<18)           /* 256K bit */
+  #define PRES_BITS   12
+  #define EXP2_FB     12
+#elif defined(BCB_POOL_BITS)
+  #define BTV3_DYNAMIC 0
+  #define POOL_CAP0   (1UL<<BCB_POOL_BITS)
+  #define BT_NSLOTS0  (1UL<<(BCB_POOL_BITS+1))
+  #define CTX_CAP0    (1UL<<(BCB_POOL_BITS-1))
+  #define CTX_NSLOTS0 (1UL<<BCB_POOL_BITS)
+  #define BLOOM_BITS  (1<<24)
+  #define PRES_BITS   16
+  #define EXP2_FB     16
 #else
-  /* pool 크기 조정: -DBCB_POOL_BITS=N (BT_POOL=2^N). 기본 23(8M). 25=32M, 26=64M. */
-  #ifndef BCB_POOL_BITS
-    #define BCB_POOL_BITS 23
-  #endif
-  #define BT_POOL     (1ul<<BCB_POOL_BITS)
-  #define BT_SLOTS    (1ul<<(BCB_POOL_BITS+1))   /* load ≤0.5 */
-  #define CTX_POOL    (1ul<<(BCB_POOL_BITS-1))   /* ctx ≤ bt entries */
-  #define CTX_SLOTS   (1ul<<BCB_POOL_BITS)
+  #define BTV3_DYNAMIC 1
+  #define POOL_CAP0   (1UL<<16)         /* 64K 시작 */
+  #define BT_NSLOTS0  (1UL<<17)
+  #define CTX_CAP0    (1UL<<15)
+  #define CTX_NSLOTS0 (1UL<<16)
   #define BLOOM_BITS  (1<<24)
   #define PRES_BITS   16
   #define EXP2_FB     16
 #endif
-#define BT_SLOT_MASK  (BT_SLOTS-1)
 #define BT_MAX_DEPTH  24
 #define BT_LEVELS_V4  6
 #define BLOOM_MASK    (BLOOM_BITS-1)
-#define CTX_SLOT_MASK (CTX_SLOTS-1)
 
 /* ── 고정소수 파라미터 ───────────────────────────────────── */
 #define LOG2_FB    16                 /* log2 값 Q16 */
@@ -65,10 +73,10 @@ typedef struct { unsigned char ctx[BT_MAX_DEPTH]; unsigned char ctx_len; unsigne
 
 static CtxEntry *g_ctx_pool;
 static int      *g_ctx_slot;
-static unsigned long g_ctx_used;
+static unsigned long g_ctx_used, g_ctx_cap, g_ctx_nslots, g_ctx_mask;
 static BtEntry  *g_pool;
 static int      *g_bt_slot;
-static unsigned long g_pool_used;
+static unsigned long g_pool_used, g_pool_cap, g_bt_nslots, g_bt_mask;
 static unsigned char g_bloom[BLOOM_BITS/8];
 static unsigned char g_window[BT_MAX_DEPTH];
 static int g_win_len;
@@ -94,32 +102,66 @@ static inline int64_t exp2_w(int64_t norm_q16){
     return (int64_t)EXP2_FRAC[fr] >> ip;
 }
 
+/* ── 동적 성장 (pool·slot 2배 + slot rehash). 반환 0 ok / -1 불가(고정·MCU 또는 OOM) ── */
+static int bt_grow(void){
+    if(!BTV3_DYNAMIC) return -1;
+    unsigned long ncap = g_pool_cap*2, ns = g_bt_nslots*2;
+    BtEntry *np = (BtEntry*)realloc(g_pool, sizeof(BtEntry)*ncap); if(!np) return -1; g_pool=np; g_pool_cap=ncap;
+    int *nslot = (int*)realloc(g_bt_slot, sizeof(int)*ns); if(!nslot) return -1; g_bt_slot=nslot;
+    g_bt_nslots=ns; g_bt_mask=ns-1;
+    memset(g_bt_slot, -1, sizeof(int)*ns);
+    for(unsigned long i=0;i<g_pool_used;i++){               /* rehash: index 는 불변 */
+        BtEntry *e=&g_pool[i];
+        unsigned int h=((fnv(e->ctx,e->ctx_len)^e->next_byte)*16777619u)&g_bt_mask;
+        while(g_bt_slot[h]>=0) h=(h+1)&g_bt_mask;
+        g_bt_slot[h]=(int)i;
+    }
+    return 0;
+}
+static int ctx_grow(void){
+    if(!BTV3_DYNAMIC) return -1;
+    unsigned long ncap = g_ctx_cap*2, ns = g_ctx_nslots*2;
+    CtxEntry *np = (CtxEntry*)realloc(g_ctx_pool, sizeof(CtxEntry)*ncap); if(!np) return -1; g_ctx_pool=np; g_ctx_cap=ncap;
+    int *nslot = (int*)realloc(g_ctx_slot, sizeof(int)*ns); if(!nslot) return -1; g_ctx_slot=nslot;
+    g_ctx_nslots=ns; g_ctx_mask=ns-1;
+    memset(g_ctx_slot, -1, sizeof(int)*ns);
+    for(unsigned long i=0;i<g_ctx_used;i++){
+        CtxEntry *e=&g_ctx_pool[i];
+        unsigned int h=fnv(e->ctx,e->ctx_len)&g_ctx_mask;
+        while(g_ctx_slot[h]>=0) h=(h+1)&g_ctx_mask;
+        g_ctx_slot[h]=(int)i;
+    }
+    return 0;
+}
+
 /* ── CtxEntry open addressing ─────────────────────────────── */
 static inline CtxEntry* ctx_find_h(const unsigned char *ctx, int cl, unsigned int ch){
-    unsigned int h = ch & CTX_SLOT_MASK;
+    unsigned int h = ch & g_ctx_mask;
     for(;;){
         int s = g_ctx_slot[h];
         if(s < 0) return NULL;
         CtxEntry *e = &g_ctx_pool[s];
         if(e->ctx_len==cl && memcmp(e->ctx,ctx,cl)==0) return e;
-        h = (h+1) & CTX_SLOT_MASK;
+        h = (h+1) & g_ctx_mask;
     }
 }
 static inline CtxEntry* ctx_get_h(const unsigned char *ctx, int cl, unsigned int ch){
-    unsigned int h = ch & CTX_SLOT_MASK;
     for(;;){
-        int s = g_ctx_slot[h];
-        if(s < 0){
-            if(g_ctx_used >= CTX_POOL) return NULL;
-            int idx = (int)g_ctx_used;
-            CtxEntry *e = &g_ctx_pool[idx];
-            memcpy(e->ctx,ctx,cl); e->ctx_len=cl; e->total_freq=0; e->unique_next=0; e->first_entry=-1;
-            g_ctx_slot[h] = idx; g_ctx_used++;
-            return e;
+        unsigned int h = ch & g_ctx_mask;
+        for(;;){
+            int s = g_ctx_slot[h];
+            if(s < 0){
+                if(g_ctx_used >= g_ctx_cap){ if(ctx_grow()!=0) return NULL; break; } /* 성장 후 재탐사 */
+                int idx = (int)g_ctx_used;
+                CtxEntry *e = &g_ctx_pool[idx];
+                memcpy(e->ctx,ctx,cl); e->ctx_len=cl; e->total_freq=0; e->unique_next=0; e->first_entry=-1;
+                g_ctx_slot[h] = idx; g_ctx_used++;
+                return e;
+            }
+            CtxEntry *e = &g_ctx_pool[s];
+            if(e->ctx_len==cl && memcmp(e->ctx,ctx,cl)==0) return e;
+            h = (h+1) & g_ctx_mask;
         }
-        CtxEntry *e = &g_ctx_pool[s];
-        if(e->ctx_len==cl && memcmp(e->ctx,ctx,cl)==0) return e;
-        h = (h+1) & CTX_SLOT_MASK;
     }
 }
 
@@ -141,21 +183,26 @@ static void bt_update(const unsigned char *ctx, int cl, unsigned char next){
     if(cl<=0||cl>BT_MAX_DEPTH)return;
     unsigned int ch=fnv(ctx,cl);
     bloom_set(ctx,cl);
-    unsigned int h = ((ch ^ next) * 16777619u) & BT_SLOT_MASK;
+    unsigned int key = (ch ^ next) * 16777619u;
     int is_new; long new_idx = -1;
-    for(;;){
-        int s = g_bt_slot[h];
-        if(s < 0){
-            if(g_pool_used >= BT_POOL) return;
-            new_idx = (long)g_pool_used;
-            BtEntry *e = &g_pool[new_idx];
-            memcpy(e->ctx,ctx,cl); e->ctx_len=cl; e->next_byte=next; e->freq=1; e->ctx_next=-1;
-            g_bt_slot[h] = (int)new_idx; g_pool_used++;
-            is_new = 1; break;
+    for(;;){                                    /* 바깥: 성장 시 재탐사 */
+        unsigned int h = key & g_bt_mask;
+        int done = 0;
+        for(;;){
+            int s = g_bt_slot[h];
+            if(s < 0){
+                if(g_pool_used >= g_pool_cap){ if(bt_grow()!=0) return; break; } /* 재탐사 */
+                new_idx = (long)g_pool_used;
+                BtEntry *e = &g_pool[new_idx];
+                memcpy(e->ctx,ctx,cl); e->ctx_len=cl; e->next_byte=next; e->freq=1; e->ctx_next=-1;
+                g_bt_slot[h] = (int)new_idx; g_pool_used++;
+                is_new = 1; done = 1; break;
+            }
+            BtEntry *e = &g_pool[s];
+            if(e->ctx_len==cl && e->next_byte==next && memcmp(e->ctx,ctx,cl)==0){ e->freq++; is_new=0; done=1; break; }
+            h = (h+1) & g_bt_mask;
         }
-        BtEntry *e = &g_pool[s];
-        if(e->ctx_len==cl && e->next_byte==next && memcmp(e->ctx,ctx,cl)==0){ e->freq++; is_new=0; break; }
-        h = (h+1) & BT_SLOT_MASK;
+        if(done) break;
     }
     CtxEntry *cc = ctx_get_h(ctx,cl,ch);
     if(cc){
@@ -216,13 +263,16 @@ static void build_luts(void){
 }
 
 void bt_v3_init(void){
-    if(!g_pool)     g_pool     = (BtEntry*)malloc(sizeof(BtEntry)*BT_POOL);
-    if(!g_ctx_pool) g_ctx_pool = (CtxEntry*)malloc(sizeof(CtxEntry)*CTX_POOL);
-    if(!g_bt_slot)  g_bt_slot  = (int*)malloc(sizeof(int)*BT_SLOTS);
-    if(!g_ctx_slot) g_ctx_slot = (int*)malloc(sizeof(int)*CTX_SLOTS);
+    /* 시작(또는 고정) 용량으로 (재)할당. 동적 모드에선 이전 실행에서 커진 분을 초기로 되돌린다. */
+    g_pool_cap=POOL_CAP0; g_bt_nslots=BT_NSLOTS0; g_bt_mask=g_bt_nslots-1;
+    g_ctx_cap=CTX_CAP0;  g_ctx_nslots=CTX_NSLOTS0; g_ctx_mask=g_ctx_nslots-1;
+    g_pool     = (BtEntry*)realloc(g_pool,     sizeof(BtEntry)*g_pool_cap);
+    g_ctx_pool = (CtxEntry*)realloc(g_ctx_pool, sizeof(CtxEntry)*g_ctx_cap);
+    g_bt_slot  = (int*)realloc(g_bt_slot,  sizeof(int)*g_bt_nslots);
+    g_ctx_slot = (int*)realloc(g_ctx_slot, sizeof(int)*g_ctx_nslots);
     build_luts();
-    memset(g_bt_slot,  -1, sizeof(int)*BT_SLOTS);
-    memset(g_ctx_slot, -1, sizeof(int)*CTX_SLOTS);
+    memset(g_bt_slot,  -1, sizeof(int)*g_bt_nslots);
+    memset(g_ctx_slot, -1, sizeof(int)*g_ctx_nslots);
     memset(g_bloom, 0, sizeof(g_bloom));
     memset(g_window, 0, sizeof(g_window));
     g_win_len=0; g_ctx_used=0; g_pool_used=0;
@@ -339,18 +389,23 @@ void bt_v3_distribution(unsigned int *cum_out, unsigned int scale) {
 }
 unsigned long bt_v3_entries(void){return g_pool_used;}
 
+/* 현재(런타임) 할당 기준 footprint. init 전이면 시작 용량으로 보고. */
 unsigned long bt_v3_footprint(BtV3Mem *m){
+    unsigned long pcap = g_pool_cap ? g_pool_cap : POOL_CAP0;
+    unsigned long psl  = g_bt_nslots ? g_bt_nslots : BT_NSLOTS0;
+    unsigned long ccap = g_ctx_cap ? g_ctx_cap : CTX_CAP0;
+    unsigned long csl  = g_ctx_nslots ? g_ctx_nslots : CTX_NSLOTS0;
     BtV3Mem t;
-    t.bt_pool   = (unsigned long)sizeof(BtEntry)*BT_POOL;
-    t.bt_slot   = (unsigned long)sizeof(int)*BT_SLOTS;
-    t.ctx_pool  = (unsigned long)sizeof(CtxEntry)*CTX_POOL;
-    t.ctx_slot  = (unsigned long)sizeof(int)*CTX_SLOTS;
+    t.bt_pool   = (unsigned long)sizeof(BtEntry)*pcap;
+    t.bt_slot   = (unsigned long)sizeof(int)*psl;
+    t.ctx_pool  = (unsigned long)sizeof(CtxEntry)*ccap;
+    t.ctx_slot  = (unsigned long)sizeof(int)*csl;
     t.bloom     = BLOOM_BITS/8;
     t.luts      = (unsigned long)sizeof(int32_t)*(PRES+EXP2_FN);
     t.total = t.bt_pool+t.bt_slot+t.ctx_pool+t.ctx_slot+t.bloom+t.luts;
     t.bt_entry_sz = sizeof(BtEntry);
     t.ctx_entry_sz = sizeof(CtxEntry);
-    t.bt_pool_n = BT_POOL; t.ctx_pool_n = CTX_POOL; t.bloom_bits = BLOOM_BITS;
+    t.bt_pool_n = pcap; t.ctx_pool_n = ccap; t.bloom_bits = BLOOM_BITS;
     t.lut_n = PRES;
 #ifdef BCB_MCU
     t.is_mcu = 1;
