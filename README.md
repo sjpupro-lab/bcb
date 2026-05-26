@@ -84,8 +84,12 @@ matching(brotli/zstd)이 이긴다. **큰 데이터엔 brotli/zstd 를 쓰라.**
   상세·정직한 한계: `docs/mmap_prior.md`.
 - **landmark prior index** (`--landmark-k`): prior 안 빈출 context 에 sharper cum 을 박아
   hit 시 predict 를 건너뛴다 — 압축비·속도 동시 향상, 무손실(저장된 정수 cum 을 enc/dec 가 공유).
-  실측: **HTTP 헤더 +30~42% & ~4× 속도**, MQTT/syslog +8~16%, **IoT 0%**(고엔트로피 binary).
+  실측: **HTTP 헤더 +30~42% & ~4× 속도**, MQTT/syslog +8~16%, **IoT 0%**(byte-context 미적중).
   message 단위 random access 가능(sub-message 는 불가 — 정직한 한계). 상세: `docs/landmark.md`.
+- **structural (position-aware) landmark** (v6, 측정 단계): 고정 레코드 binary 데이터를 *위치별* 분포로
+  압축. 측정(`make structbench`, entropy 추정): binary_record/modbus **+71~73%**, CAN +41%.
+  **IoT 는 배치가 좌우 — per-device stream 에선 pos-delta 6.45× (5×+ 가능)**, 다중 device interleave
+  공유 게이트웨이는 ~2.0×. 인코더 통합은 후속(PR-2). 상세·정직한 한계: `docs/structural_landmark.md`.
 
 ---
 

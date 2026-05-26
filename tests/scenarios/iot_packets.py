@@ -32,11 +32,13 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--bytes", type=int, default=262144)
     ap.add_argument("--seed", type=int, default=1234)
+    ap.add_argument("--devices", type=int, default=8,
+                    help="number of interleaved devices (1 = single per-device stream)")
     args = ap.parse_args()
     rng = random.Random(args.seed)
     out = sys.stdout.buffer
 
-    n_dev = 8
+    n_dev = max(1, args.devices)
     devs = []
     for d in range(n_dev):
         devs.append({

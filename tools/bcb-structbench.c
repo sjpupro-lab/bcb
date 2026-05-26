@@ -62,31 +62,47 @@ int main(int argc, char **argv) {
     if (test_size < test_len) test_len = test_size;
     test_len -= test_len % R;
 
-    /* 위치별 byte / delta 경험적 빈도 (train) */
+    /* 위치별 byte / delta 경험적 빈도. mode 결정 overfit 을 피하려 train 을
+     * fit(분포 적합) / val(mode 결정) 로 나눈다 — interleave 데이터에서 train self-
+     * entropy 가 mode 를 잘못 고르던 문제(hybrid<pos-delta) 교정. */
     static double bf[RMAX][256], df[RMAX][256];
     memset(bf, 0, sizeof bf); memset(df, 0, sizeof df);
     size_t nrec_tr = train_size / R;
-    for (size_t r = 0; r < nrec_tr; r++)
+    size_t nfit = nrec_tr >= 5 ? (nrec_tr * 4) / 5 : nrec_tr;   /* 80% fit, 20% val */
+
+    /* fit 구간으로 분포 적합 */
+    for (size_t r = 0; r < nfit; r++)
         for (int p = 0; p < R; p++) {
             unsigned char b = train[r*R + p];
             bf[p][b] += 1.0;
             if (r > 0) { unsigned char d = (unsigned char)(b - train[(r-1)*R + p]); df[p][d] += 1.0; }
         }
 
-    /* 위치별 mode 결정: train self cross-entropy 비교 (byte vs delta) */
+    /* val 구간(held-out)에서 byte vs delta cross-entropy 로 위치별 mode 결정 */
     int mode_delta[RMAX];          /* 1=delta, 0=byte */
     for (int p = 0; p < R; p++) {
-        double tb = 0, td = 0; double totb = 0, totd = 0;
+        double totb = 0, totd = 0;
         for (int b = 0; b < 256; b++) { totb += bf[p][b]; totd += df[p][b]; }
-        for (size_t r = 0; r < nrec_tr; r++) {
+        double vb = 0, vd = 0;
+        size_t vstart = (nfit < nrec_tr) ? nfit : 1;   /* val 없으면 fit self 로 폴백 */
+        size_t vn = 0;
+        for (size_t r = vstart; r < nrec_tr; r++) {
             unsigned char b = train[r*R + p];
-            double pb = (bf[p][b] + SMOOTH) / (totb + 256*SMOOTH);
-            tb += -log2(pb);
-            if (r > 0) { unsigned char d=(unsigned char)(b-train[(r-1)*R+p]); double pd=(df[p][d]+SMOOTH)/(totd+256*SMOOTH); td += -log2(pd); }
-            else td += 8.0;
+            vb += -log2((bf[p][b] + SMOOTH) / (totb + 256*SMOOTH));
+            unsigned char d = (unsigned char)(b - train[(r-1)*R + p]);
+            vd += -log2((df[p][d] + SMOOTH) / (totd + 256*SMOOTH));
+            vn++;
         }
-        mode_delta[p] = (td < tb) ? 1 : 0;
+        mode_delta[p] = (vn > 0 && vd < vb) ? 1 : 0;
     }
+
+    /* val 구간을 분포에 합산 → 전체 train 분포로 test 측정 */
+    for (size_t r = nfit; r < nrec_tr; r++)
+        for (int p = 0; p < R; p++) {
+            unsigned char b = train[r*R + p];
+            bf[p][b] += 1.0;
+            if (r > 0) { unsigned char d = (unsigned char)(b - train[(r-1)*R + p]); df[p][d] += 1.0; }
+        }
 
     /* base: trained btv3 를 test 위에서 순차 처리 (frozen) */
     CecBT bt = btv3_cec_bt();
