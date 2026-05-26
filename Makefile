@@ -25,7 +25,17 @@ V4_SRC  := $(V4_DIR)/aux.c
 BUILD   := build
 CORPUS  := tests/corpus/pride_and_prejudice.txt
 
-.PHONY: all test bench clean
+# msgbench: 작은 메시지 벤치 (BCB vs brotli+dict vs zstd+dict).
+# 요구: libbrotli-dev (libbrotlienc/dec/common), libzstd-dev.
+MSGBENCH_LIBS := -lbrotlienc -lbrotlidec -lbrotlicommon -lzstd
+SCN      := tests/scenarios
+SCENARIOS := http_headers iot_packets mqtt_messages log_lines rpc_calls
+MSG_TRAIN ?= 50000
+MSG_SIZES ?= 64,128,256,512,1024,2048,4096
+MSG_BYTES ?= 400000
+MSG_SAMPLES ?= 24
+
+.PHONY: all test bench clean msgbench msgbench-md msgbench-check
 
 all: $(BUILD)/bcb-cli $(BUILD)/bcb-bench
 
@@ -102,6 +112,38 @@ v3-pool: $(BUILD)/test_v3_pool8 $(BUILD)/test_v3_pool32 $(BUILD)/test_v3_pool64 
 
 bench: $(BUILD)/bcb-bench
 	./$(BUILD)/bcb-bench $(CORPUS)
+
+# ── 작은 메시지 벤치마크 ─────────────────────────────────
+$(BUILD)/bcb-msgbench: tools/bcb-msgbench.c $(V0_SRC) $(V3_SRC) | $(BUILD)
+	$(CC) $(CFLAGS) $(V0_INC) $(V3_INC) -o $@ $^ $(LDLIBS) $(MSGBENCH_LIBS)
+
+# 시나리오별 합성 코퍼스 생성 (결정적, --seed 고정)
+$(BUILD)/corpus_%.bin: $(SCN)/%.py | $(BUILD)
+	python3 $< --bytes $(MSG_BYTES) > $@
+
+# 5개 시나리오 자동 측정 (사람이 읽는 표)
+msgbench: $(BUILD)/bcb-msgbench $(addprefix $(BUILD)/corpus_,$(addsuffix .bin,$(SCENARIOS)))
+	@for s in $(SCENARIOS); do \
+	  echo "=== $$s ==="; \
+	  ./$(BUILD)/bcb-msgbench --corpus $(BUILD)/corpus_$$s.bin \
+	    --train-size $(MSG_TRAIN) --message-sizes $(MSG_SIZES) --samples $(MSG_SAMPLES); \
+	  echo ""; \
+	done
+
+# 동일 측정을 markdown 표로 (docs 갱신용)
+msgbench-md: $(BUILD)/bcb-msgbench $(addprefix $(BUILD)/corpus_,$(addsuffix .bin,$(SCENARIOS)))
+	@for s in $(SCENARIOS); do \
+	  ./$(BUILD)/bcb-msgbench --corpus $(BUILD)/corpus_$$s.bin \
+	    --train-size $(MSG_TRAIN) --message-sizes $(MSG_SIZES) --samples $(MSG_SAMPLES) \
+	    --md --label $$s; \
+	  echo ""; \
+	done
+
+# CI 회귀: BCB 압축비를 committed baseline 과 비교 (±2% 허용)
+msgbench-check: $(BUILD)/bcb-msgbench $(addprefix $(BUILD)/corpus_,$(addsuffix .bin,$(SCENARIOS)))
+	python3 $(SCN)/check_regression.py --bin $(BUILD)/bcb-msgbench \
+	  --build $(BUILD) --train-size $(MSG_TRAIN) --message-sizes $(MSG_SIZES) \
+	  --samples $(MSG_SAMPLES) --baseline $(SCN)/baseline.json --tol 0.02
 
 clean:
 	rm -rf $(BUILD)

@@ -1,8 +1,8 @@
-# BCB — Binary Compression by BT
+# BCB — Small-Message Lossless Compression
 
-**코드북 없는 무손실 압축. 학습된 BT prior + range coder. 전 구간 정수(MCU 대응).**
-Codebook-free lossless compression: a learned BT (Bipedal Tree) prior + range coder,
-with an all-integer, libm-free path that runs on microcontrollers.
+**공유 prior 를 가진 작은 메시지를 위한 무손실 압축기. 학습된 BT prior + range coder, 전 구간 정수(MCU 대응).**
+A lossless compressor optimized for **small messages with a shared prior**.
+Learned BT (Bipedal Tree) prior + range coder, all-integer / libm-free path that runs on microcontrollers.
 
 Author: 호시 <jahyag@gmail.com> · Org: sjpupro-lab · License: MIT
 
@@ -11,12 +11,67 @@ Author: 호시 <jahyag@gmail.com> · Org: sjpupro-lab · License: MIT
 ## 한 줄 요약 / TL;DR
 
 인코더와 디코더가 **같은 학습된 BT prior(공간)** 를 공유하고, 데이터를 그 공간 안의
-**한 점(range coder 정수)** 으로 보낸다. 공간 자체는 전송하지 않으므로(양쪽이 외움)
-실제 책 데이터에서 gzip·bzip2·xz 를 모두 능가한다.
+**한 점(range coder 정수)** 으로 보낸다. 공간은 전송하지 않는다(양쪽이 외움).
+**메시지 ≤256B** 구간(HTTP 헤더, IoT 패킷, MQTT, 로그, RPC)에서 BCB 는 64B 기준
+brotli+dict 를 **+22~80%** 앞선다. **~2KB 이상이면 brotli/zstd 를 써라** — 더 빠르고 더 잘 압축한다.
 
-Encoder and decoder share the same learned BT prior (the *space*); the data is sent as a
-single *point* in that space (a range-coder integer). The space itself is never transmitted,
-so on real text BCB beats gzip/bzip2/xz.
+Encoder and decoder share the same learned BT prior (the *space*); the data is sent as a single
+*point* in that space. The space is never transmitted. For messages **≤256 bytes**, BCB beats
+brotli+dict by **22–80% at 64B**; for data larger than ~2KB, use brotli or zstd instead.
+
+---
+
+## BCB 가 이기는 곳 / When BCB wins
+
+`make msgbench` 실측 (train-size 50,000, samples 24, 코어 코덱 출력 바이트, BCB round-trip 무손실).
+ratio = 원본/압축, 클수록 좋음. 자세히는 `docs/benchmarks.md`.
+
+| 시나리오 | 크기 | **BCB** | brotli+dict | zstd+dict | BCB 우위 |
+|---|---|---|---|---|---|
+| MQTT     | 64B  | **4.03×** | 2.24× | 2.10× | **+80%** |
+| RPC      | 64B  | **3.49×** | 1.91× | 2.08× | **+68%** |
+| syslog   | 64B  | **3.18×** | 1.95× | 1.72× | **+63%** |
+| IoT 패킷 | 64B  | **1.54×** | 0.95× | 0.98× | **+57%** |
+| HTTP 헤더 | 64B  | **5.19×** | 4.25× | 2.97× | **+22%** |
+| MQTT     | 256B | **4.31×** | 3.62× | 3.36× | **+19%** |
+| MQTT     | 512B | **4.39×** | 4.31× | 4.11× | **+2%**  |
+
+- **64B 에서 5개 시나리오 전부 BCB 1등.** 256B 까지는 4/5 에서 우위(HTTP 만 예외), MQTT 는 512B 까지.
+- IoT 64B 에서 brotli·zstd 는 프레임 overhead 로 **데이터를 키운다(<1.0×)** — BCB 는 1.54× 유지.
+- **메시지가 작을수록 BCB 우위가 커진다.**
+
+## BCB 가 지는 곳 / When BCB loses (정직하게)
+
+| 시나리오 | 크기 | BCB | brotli+dict | zstd+dict | winner |
+|---|---|---|---|---|---|
+| HTTP 헤더 | 128B  | 5.95× | **6.95×** | 5.18× | brotli |
+| syslog   | 1024B | 3.41× | **3.90×** | 3.78× | brotli |
+| MQTT     | 4096B | 4.46× | **5.78×** | 5.64× | brotli |
+| IoT 패킷 | 4096B | 1.47× | **2.04×** | 1.72× | brotli |
+| HTTP 헤더 | 4096B | 5.99× | **14.56×** | 13.93× | brotli |
+
+교차점은 대략 **512B~1KB**. 그 이상에서는 LZ77 long-range matching(brotli/zstd)이 이긴다.
+HTTP 텍스트 헤더는 LZ 친화적이라 128B 부터 brotli 가 앞선다. **큰 데이터엔 brotli/zstd 를 쓰라.**
+
+> 원 기획서의 "검증된" 수치(예: HTTP 64B 10.67×)와 본 레포 실측의 차이·원인은
+> `docs/benchmarks.md`의 "원 보고 수치와의 차이"에 병기했다 (방향은 일치, 절대 배수는 코퍼스 의존).
+
+## 타겟 사용처 / Target use cases
+
+- IoT 텔레메트리 패킷 (10–500B) — `tests/scenarios/iot_packets.py`
+- HTTP/2 헤더 압축 대안 (소형 헤더) — `tests/scenarios/http_headers.py`
+- MQTT / CoAP / gRPC 소형 메시지 — `tests/scenarios/mqtt_messages.py`, `rpc_calls.py`
+- 임베디드 로그 라인, 푸시 알림, RPC 호출 — `tests/scenarios/log_lines.py`
+
+자세한 적용·비적용 기준은 `docs/use_cases.md`.
+
+## 속성 / Properties
+
+- 전 구간 정수 파이프라인 (no float, no libm) — v3 정수 BT.
+- MCU 빌드: **3.56MB** (ESP32 / RP2040 / STM32H7), `docs/mcu.md`.
+- 데스크톱 동적 빌드: 학습 데이터에 비례해 pool 성장 (상한 없음).
+- 여러 데이터 종류에서 round-trip 무손실 검증 (CI `make msgbench-check`).
+- **인코더와 디코더는 같은 학습 prior 를 공유해야 한다.**
 
 ---
 
@@ -29,27 +84,34 @@ so on real text BCB beats gzip/bzip2/xz.
 - **점 (point)** — 데이터가 그 공간에서 차지하는 위치. range coder 의 정수 하나.
 - **전송** — 점의 좌표만. 공간은 보내지 않는다.
 
-**호시 통찰 / Hoshi's insight** — 코드북(외부 chunk 사전)은 BT 의 long-context 예측력을
-가로막으므로 **제거**한다. BT 가 "이 context 면 다음 바이트는?" 을 직접 학습한다.
-A codebook blocks BT's long-context prediction, so it is removed; BT learns the
-next byte given a variable-length context directly.
+코드북(외부 chunk 사전)은 BT 의 long-context 예측을 가로막으므로 제거한다. BT 가
+"이 context 면 다음 바이트는?" 을 직접 학습한다. A codebook blocks BT's long-context
+prediction, so it is removed; BT learns the next byte given a variable-length context directly.
 
 ---
 
-## 측정 결과 / Benchmarks
+## 빌드 & 실행 / Build & run
 
-Pride and Prejudice 4KB 발췌를 압축. BCB 는 발췌 직전 코퍼스로 학습 (공유 prior).
-표준 압축기는 발췌 단독(공유 모델 없음) 압축. `make bench` 로 재현.
+요구사항: C99 컴파일러. v3 정수 경로는 libm 없음. **작은 메시지 벤치는 `libbrotli-dev`, `libzstd-dev` 필요.**
 
-| 학습량 / train | BCB       | gzip-9 | bzip2-9 | xz-9  |
-|----------------|-----------|--------|---------|-------|
-| 0 KB           | 1.96×     | —      | —       | —     |
-| 50 KB          | 2.78×     | 2.05×  | 2.19×   | 1.99× |
-| 200 KB         | 3.04×     | —      | —       | —     |
-| 500 KB         | **3.16×** | —      | —       | —     |
+```sh
+make all          # bcb-cli, bcb-bench
+make test         # 무손실 round-trip 검증
 
-50 KB 학습만으로 bzip2-9 를 넘고, 500 KB 에서 세 압축기를 모두 능가. 대규모 학습(수 MB)에서는
-더 큰 BT pool 로 압축비가 더 오른다 (아래 "메모리·pool" 참고). 상세: `docs/benchmarks.md`.
+# 작은 메시지 벤치 (BCB vs brotli+dict vs zstd+dict)
+make msgbench         # 5개 시나리오 표
+make msgbench-md      # markdown 표 (docs 갱신용)
+make msgbench-check   # baseline 대비 회귀 검사 (±2%)
+```
+
+CLI (공유 prior `-t` 는 encode/decode 양쪽 동일해야 함):
+
+```sh
+build/bcb-cli encode in.txt out.bcb -t tests/corpus/pride_and_prejudice.txt
+build/bcb-cli decode out.bcb restored.txt -t tests/corpus/pride_and_prejudice.txt
+```
+
+레거시 텍스트 벤치(gzip/bzip2/xz vs 4KB 책 발췌)·v0~v4 개발 기록: `make bench`, `docs/benchmarks_legacy.md`.
 
 ---
 
@@ -57,63 +119,13 @@ Pride and Prejudice 4KB 발췌를 압축. BCB 는 발췌 직전 코퍼스로 학
 
 | 단계 | 내용 | 결과 |
 |------|------|------|
-| **v0** `src/v0_baseline` | range coder + 24-byte context n-gram BT | baseline (500K 학습 3.16×) |
-| **v1** `src/v1_symmetric_dist` | 분포 합=1 강제 재양자화 | 전 학습량 +0.3%, 무손실 |
-| v2 (시계계층) | carry-tick 좌표를 BT context 에 mix | **폐기** (bucket fragmentation, −1.5~−180%) |
-| **v3** `src/v3_integer_bt` | distribution caching → open addressing → 정수 hot path(log-domain) → libm 제거 + MCU | v0 대비 **−0.13%**, **~28× 가속**, 1M 학습 무손실, MCU **3.56MB** |
-| **v4** `src/v4_aux_channel` | 거시 통계 보조채널 (distribution blend) | byte_type/bigram/case/whitespace, **combo +2.94%**, 무손실 |
+| **v0** `src/v0_baseline` | range coder + 24-byte context n-gram BT | reference |
+| **v1** `src/v1_symmetric_dist` | 분포 합=1 강제 재양자화 | +0.3%, 무손실 |
+| v2 (시계계층) | carry-tick 좌표를 BT context 에 mix | **폐기** (fragmentation) |
+| **v3** `src/v3_integer_bt` | caching → open addressing → 정수 hot path → libm 제거 + MCU | v0 대비 −0.13%, ~28× 가속, MCU 3.56MB |
+| **v4** `src/v4_aux_channel` | 거시 통계 보조채널 (distribution blend) | combo +2.94%, 무손실 |
 
-설계·측정 기록은 `docs/theory.md`, `docs/benchmarks.md` 참고.
-
----
-
-## 빌드 & 실행 / Build & run
-
-요구사항: C99 컴파일러. v0 baseline 은 libm(`-lm`) 사용, **v3 정수 경로는 libm 없음**. 외부 라이브러리 의존성 없음.
-
-```sh
-make all          # bcb-cli, bcb-bench 빌드
-make test         # 무손실 round-trip 검증
-make bench        # gzip/bzip2/xz 비교
-```
-
-검증·측정 타깃:
-
-```sh
-make v1-compare   # v0 vs v1 (합=1) ablation
-make v3-compare   # v0 vs v3 정수 BT — 동등성(±0.5%)·속도 (4권)
-make v3-scale     # v3 대규모 학습 스케일링 (open addressing)
-make v4-aux       # 보조채널 ablation (정수, v3 파이프라인, 4권)
-make meminfo      # 메모리 footprint (desktop / MCU) + 무손실 점검
-make v3-pool      # BT_POOL 고정 8M/32M/64M vs 동적 비교 (large.txt 필요)
-```
-
-대규모 학습 코퍼스: `sh tests/corpus/fetch_large.sh` → `tests/corpus/large.txt` (~11MB, git 미포함).
-
-### CLI
-
-```sh
-build/bcb-cli encode input.txt out.bcb -t tests/corpus/pride_and_prejudice.txt
-build/bcb-cli decode out.bcb restored.txt -t tests/corpus/pride_and_prejudice.txt
-```
-
-`-t` 학습 파일은 encode/decode 양쪽에서 동일해야 한다 (공유 prior).
-
----
-
-## 메모리 · pool / Memory & pool
-
-BT pool 크기는 압축비와 메모리를 가른다. 세 가지 빌드 모드:
-
-| 모드 | 빌드 플래그 | pool | 용도 |
-|------|------------|------|------|
-| 동적 (기본) | (없음) | 작게 시작해 realloc 로 성장(상한 없음) | 메모리 비례, 대규모 학습 |
-| 고정 | `-DBCB_POOL_BITS=N` | 2^N 고정 | 크기·압축비 비교 (8M/32M/64M) |
-| MCU | `-DBCB_MCU` | 소형 고정(~3.56MB) | ESP32/RP2040 |
-
-대규모 학습 비교(4KB 발췌, diverse 코퍼스): 4MB 학습 8M→32M→64M = 2.80→2.96→3.06×.
-**동적 모드는 포화 없이 성장** → 10MB 학습에서 **3.43×** (고정 64M 3.04×, 포화 대비 큰 향상).
-또 30KB 학습 메모리는 고정 546MB → 동적 94.5MB 로 줄어든다. 상세: `docs/benchmarks.md`, `docs/mcu.md`.
+설계·측정 기록: `docs/theory.md`, `docs/benchmarks.md`, `docs/benchmarks_legacy.md`, `docs/mcu.md`.
 
 ---
 
@@ -124,20 +136,20 @@ src/v0_baseline/        range coder + n-gram BT (reference)
 src/v1_symmetric_dist/  분포 합=1 정규화
 src/v3_integer_bt/      정수 BT (caching, open addressing, log-domain, MCU)
 src/v4_aux_channel/     보조채널 (distribution blend)
-tests/                  round-trip·벤치마크, corpus/ (Gutenberg)
-tools/                  bcb-cli, bcb-bench, bcb-meminfo
-docs/                   theory.md, benchmarks.md, mcu.md
+tests/scenarios/        작은 메시지 generator (HTTP/IoT/MQTT/log/RPC) + 회귀 baseline
+tests/corpus/           Gutenberg 4권 (레거시 텍스트 벤치)
+tools/                  bcb-cli, bcb-bench, bcb-msgbench, bcb-meminfo
+docs/                   benchmarks(작은 메시지), use_cases, theory, mcu, benchmarks_legacy
 ```
 
 ---
 
 ## 정직한 한계 / Honest limits
 
-- 랜덤 데이터는 압축 불가 (Shannon). 정상.
-- n-gram BT 한계는 학습량·pool 에 좌우된다. 50K 학습 BPB≈2.0(4×)에서 대규모 학습으로 개선.
-- v0 인코드 ≈ 2 KB/s → v3 에서 caching+정수화로 ~28× 가속.
-- 대규모 학습은 메모리를 많이 쓴다 (diverse 10MB 학습 시 entry 수억 개). 동적 할당으로 메모리 비례화,
-  MCU 빌드는 소형 pool 로 압축비를 메모리와 맞바꾼다.
+- **≳1–2KB 데이터는 brotli/zstd 가 이긴다.** BCB 는 작은 메시지 전용.
+- prior 를 공유할 수 없으면 이점이 없다. 일회성·임의 데이터에 부적합.
+- 랜덤/이미 압축된 데이터는 압축 불가 (Shannon). 정상.
+- 절대 압축비는 코퍼스 redundancy 에 크게 좌우된다 — 본 레포 수치는 합성 generator 기준.
 
 ---
 
