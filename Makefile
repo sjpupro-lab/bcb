@@ -84,6 +84,21 @@ meminfo: $(BUILD)/bcb-meminfo $(BUILD)/bcb-meminfo-mcu
 	@echo ""
 	./$(BUILD)/bcb-meminfo-mcu
 
+$(BUILD)/test_v3_pool: tests/test_v3_pool.c $(V0_SRC) $(V3_SRC) | $(BUILD)
+	$(CC) $(CFLAGS) $(V0_INC) $(V3_INC) -o $@ $^ $(LDLIBS)
+$(BUILD)/test_v3_pool32: tests/test_v3_pool.c $(V0_SRC) $(V3_SRC) | $(BUILD)
+	$(CC) $(CFLAGS) -DBCB_POOL_BITS=25 $(V0_INC) $(V3_INC) -o $@ $^ $(LDLIBS)
+$(BUILD)/test_v3_pool64: tests/test_v3_pool.c $(V0_SRC) $(V3_SRC) | $(BUILD)
+	$(CC) $(CFLAGS) -DBCB_POOL_BITS=26 $(V0_INC) $(V3_INC) -o $@ $^ $(LDLIBS)
+
+# BT_POOL 크기별 대규모 학습 비교 (8M/32M/64M). large.txt 필요(fetch_large.sh).
+v3-pool: $(BUILD)/test_v3_pool $(BUILD)/test_v3_pool32 $(BUILD)/test_v3_pool64
+	./$(BUILD)/test_v3_pool
+	@echo ""
+	./$(BUILD)/test_v3_pool32
+	@echo ""
+	./$(BUILD)/test_v3_pool64
+
 bench: $(BUILD)/bcb-bench
 	./$(BUILD)/bcb-bench $(CORPUS)
 

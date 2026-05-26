@@ -32,11 +32,15 @@
   #define PRES_BITS   12              /* CONF_LOG2 4096 entries */
   #define EXP2_FB     12              /* EXP2_FRAC 4096 entries */
 #else
-  #define BT_POOL     (8*1024*1024)
-  #define BT_SLOTS    (1<<24)
+  /* pool 크기 조정: -DBCB_POOL_BITS=N (BT_POOL=2^N). 기본 23(8M). 25=32M, 26=64M. */
+  #ifndef BCB_POOL_BITS
+    #define BCB_POOL_BITS 23
+  #endif
+  #define BT_POOL     (1ul<<BCB_POOL_BITS)
+  #define BT_SLOTS    (1ul<<(BCB_POOL_BITS+1))   /* load ≤0.5 */
+  #define CTX_POOL    (1ul<<(BCB_POOL_BITS-1))   /* ctx ≤ bt entries */
+  #define CTX_SLOTS   (1ul<<BCB_POOL_BITS)
   #define BLOOM_BITS  (1<<24)
-  #define CTX_POOL    (4*1024*1024)
-  #define CTX_SLOTS   (1<<23)
   #define PRES_BITS   16
   #define EXP2_FB     16
 #endif
@@ -59,7 +63,7 @@
 typedef struct { unsigned char ctx[BT_MAX_DEPTH]; unsigned char ctx_len, next_byte; unsigned int freq; int ctx_next; } BtEntry;
 typedef struct { unsigned char ctx[BT_MAX_DEPTH]; unsigned char ctx_len; unsigned int total_freq, unique_next; int first_entry; } CtxEntry;
 
-static CtxEntry  g_ctx_pool[CTX_POOL];
+static CtxEntry *g_ctx_pool;
 static int      *g_ctx_slot;
 static unsigned long g_ctx_used;
 static BtEntry  *g_pool;
@@ -213,6 +217,7 @@ static void build_luts(void){
 
 void bt_v3_init(void){
     if(!g_pool)     g_pool     = (BtEntry*)malloc(sizeof(BtEntry)*BT_POOL);
+    if(!g_ctx_pool) g_ctx_pool = (CtxEntry*)malloc(sizeof(CtxEntry)*CTX_POOL);
     if(!g_bt_slot)  g_bt_slot  = (int*)malloc(sizeof(int)*BT_SLOTS);
     if(!g_ctx_slot) g_ctx_slot = (int*)malloc(sizeof(int)*CTX_SLOTS);
     build_luts();
@@ -224,6 +229,7 @@ void bt_v3_init(void){
 }
 void bt_v3_free(void){
     free(g_pool); g_pool=NULL;
+    free(g_ctx_pool); g_ctx_pool=NULL;
     free(g_bt_slot); g_bt_slot=NULL;
     free(g_ctx_slot); g_ctx_slot=NULL;
     free(CONF_LOG2); CONF_LOG2=NULL;
