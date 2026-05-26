@@ -39,7 +39,7 @@ MSG_SIZES ?= 64,128,256,512,1024,2048,4096
 MSG_BYTES ?= 400000
 MSG_SAMPLES ?= 24
 
-.PHONY: all test bench clean msgbench msgbench-md msgbench-check prior prior-equiv prior-rss
+.PHONY: all test bench clean msgbench msgbench-md msgbench-check prior prior-equiv prior-rss hpack hpack-docs
 
 all: $(BUILD)/bcb-cli $(BUILD)/bcb-bench
 
@@ -148,6 +148,20 @@ prior-rss: $(BUILD)/bcb-prior-build $(BUILD)/bcb-prior-test $(BUILD)/bcb-prior-t
 	./$(BUILD)/bcb-prior-test-mcu rss-mem  $$C    --train-size $(PRIOR_TRAIN) --msg-size $(PRIOR_MSG_SIZE) --msgs $(PRIOR_MSGS)
 
 prior: prior-equiv prior-rss
+
+# ── HPACK 비교 (작업 #4) ─────────────────────────────────
+# 요구: python3 -m pip install hpack
+$(BUILD)/bcb-blockbench: tools/bcb-blockbench.c $(V0_SRC) $(V3_SRC) $(V5_SRC) | $(BUILD)
+	$(CC) $(CFLAGS) $(V0_INC) $(V3_INC) $(V5_INC) -o $@ $^ $(LDLIBS)
+
+HPACK_TRAIN ?= 50000
+hpack: $(BUILD)/bcb-prior-build $(BUILD)/bcb-blockbench
+	python3 tools/bcb_vs_hpack.py --bcb-build $(BUILD) --train-bytes $(HPACK_TRAIN)
+
+# 결과를 docs 로 기록
+hpack-docs: $(BUILD)/bcb-prior-build $(BUILD)/bcb-blockbench
+	python3 tools/bcb_vs_hpack.py --bcb-build $(BUILD) --train-bytes $(HPACK_TRAIN) \
+	  --write-docs docs/hpack_comparison.md
 
 # ── 작은 메시지 벤치마크 ─────────────────────────────────
 $(BUILD)/bcb-msgbench: tools/bcb-msgbench.c $(V0_SRC) $(V3_SRC) | $(BUILD)

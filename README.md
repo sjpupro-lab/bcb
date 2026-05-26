@@ -59,7 +59,8 @@ HTTP 텍스트 헤더는 LZ 친화적이라 128B 부터 brotli 가 앞선다. **
 ## 타겟 사용처 / Target use cases
 
 - IoT 텔레메트리 패킷 (10–500B) — `tests/scenarios/iot_packets.py`
-- HTTP/2 헤더 압축 대안 (소형 헤더) — `tests/scenarios/http_headers.py`
+- HTTP/2 헤더 압축 대안 (소형 헤더) — `tests/scenarios/http_headers.py`. **HPACK 비교**:
+  cold-start 에서 BCB 5.87× vs HPACK 1.99× (≈3× 우위), warm 반복 request 는 HPACK 우세 — `docs/hpack_comparison.md`.
 - MQTT / CoAP / gRPC 소형 메시지 — `tests/scenarios/mqtt_messages.py`, `rpc_calls.py`
 - 임베디드 로그 라인, 푸시 알림, RPC 호출 — `tests/scenarios/log_lines.py`
 
@@ -151,10 +152,10 @@ src/v1_symmetric_dist/  분포 합=1 정규화
 src/v3_integer_bt/      정수 BT (caching, open addressing, log-domain, MCU)
 src/v4_aux_channel/     보조채널 (distribution blend)
 src/v5_mmap_prior/      prior 직렬화 + mmap 로드 (frozen)
-tests/scenarios/        작은 메시지 generator (HTTP/IoT/MQTT/log/RPC) + 회귀 baseline
+tests/scenarios/        작은 메시지 generator (HTTP/IoT/MQTT/log/RPC, http2) + 회귀 baseline
 tests/corpus/           Gutenberg 4권 (레거시 텍스트 벤치)
-tools/                  bcb-cli, bcb-bench, bcb-msgbench, bcb-meminfo, bcb-prior-build, bcb-prior-test
-docs/                   benchmarks(작은 메시지), use_cases, theory, mcu, benchmarks_legacy, mmap_prior
+tools/                  bcb-cli, bcb-bench, bcb-msgbench, bcb-meminfo, bcb-prior-build, bcb-prior-test, bcb-blockbench, bcb_vs_hpack.py
+docs/                   benchmarks(작은 메시지), use_cases, theory, mcu, benchmarks_legacy, mmap_prior, hpack_comparison
 ```
 
 ---
