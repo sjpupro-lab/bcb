@@ -63,6 +63,10 @@ prior(b)   = P(type(b) | prev_type) × P(b | type(b))
 P_final(b) = α · P_BT(b) + (1−α) · prior(b)
 ```
 
-byte_type 채널, α=0.985 에서 4권 중 3권 +0.4~0.6% 개선(합계 +0.41%, 무손실). context
-fragmentation 없이 BT 가 못 잡는 거시 전이(예: 알파벳→공백)를 보정하는 것이 핵심.
-v4 는 이 blend 방식의 `AuxChannel` 라이브러리로 구현한다.
+context fragmentation 없이 BT 가 못 잡는 거시 전이(예: 알파벳→공백)를 보정하는 것이 핵심.
+v4 는 이 blend 방식의 `AuxChannel` 라이브러리로 구현하며, 4종 채널을 제공한다:
+byte_type / bigram_type / case_pattern / whitespace_phase. 각 채널의 `adjust` 를 순차
+체이닝하여 결합한다.
+
+측정(α=0.985, 50KB 학습/4KB 발췌, 4권 전부 무손실): 단독 +0.6~0.8%,
+**4채널 combo +2.60%** (`docs/benchmarks.md`). 채널이 거의 가산적으로 누적된다.

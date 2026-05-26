@@ -123,13 +123,33 @@ context 를 안 건드리고 byte type prior 를 별도 학습해 α=0.985 로 b
 타입 분류: space / newline / lower / upper / digit / punct / other (7종).
 blend: `P_final(b) = α·P_BT(b) + (1−α)·P(type|prev_type)·P(b|type)`, symdist 로 합=scale·각 빈≥1 보장.
 
+### v4 4채널 ablation (`make v4-aux`)
+
+4종 채널 단독 + 4채널 combo 측정 (α=0.985, baseline=v1a, 개선% = 더 작아진 비율):
+
+| 책 | base(B) | byte_type | bigram | case | whitespace | combo(4) |
+|----|---------|-----------|--------|------|------------|----------|
+| pride | 1518 | +0.66% | +0.79% | +0.59% | +0.66% | +2.50% |
+| frankenstein | 1538 | +0.65% | +0.72% | +0.65% | +0.72% | +2.67% |
+| alice | 1431 | +0.70% | +0.77% | +0.56% | +0.77% | +2.66% |
+| moby_dick | 1634 | +0.67% | +0.73% | +0.55% | +0.67% | +2.57% |
+| **합계** | 6121 | +0.67% | +0.75% | +0.59% | +0.70% | **+2.60%** |
+
+**모든 채널이 4권 전부에서 양수, 전부 무손실.** combo 는 +2.60% (예측 +1.5~3% 범위 상단).
+단독 합(0.67+0.75+0.59+0.70=2.71) 대비 combo 2.60 → 채널 간 약한 중복, 거의 가산적.
+
+채널 정의:
+- **bigram_type**: `P(type | prev2, prev1)·P(b|type)` — 2차 타입 context.
+- **case_pattern**: `P(case | prev_case)·P(b|case)`, case ∈ {lower, upper, non-letter}.
+- **whitespace_phase**: `P(b | phase)`, phase = 직전 공백 이후 비공백 길이(0..12 clamp).
+- combo: 각 채널 `adjust` 를 순차 체이닝 (per-channel α blend).
+
 ### 결정 요약
 
 - **v2 (시계계층)**: 폐기.
 - **v3 (정수 BT)**: 진행 + 자료구조 최적화(open addressing, bloom 16M, distribution caching) 확장.
-- **v4 (보조채널)**: distribution blend 방식 `AuxChannel` 라이브러리로 재정의.
-  내장 채널 — byte_type(측정완료) / bigram_type / case_pattern / whitespace_phase.
-  기대: 4채널 결합 +1.5~3%.
+- **v4 (보조채널)**: distribution blend 방식 `AuxChannel` 라이브러리. 4채널 **측정 완료** —
+  단독 +0.6~0.8%, combo **+2.60%** (무손실). 다음: v3 정수화와 결합.
 
 ### 원 레퍼런스 (다른 발췌)
 

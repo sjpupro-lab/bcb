@@ -34,9 +34,17 @@ struct AuxChannel {
     void *state;
 };
 
-/* byte_type 채널 생성/해제 */
-AuxChannel *aux_byte_type_new(double alpha);
-void        aux_free(AuxChannel *ch);
+/* 내장 채널 생성 */
+AuxChannel *aux_byte_type_new(double alpha);       /* P(type|prev_type)·P(b|type) */
+AuxChannel *aux_bigram_type_new(double alpha);     /* P(type|pt2,pt1)·P(b|type) */
+AuxChannel *aux_case_pattern_new(double alpha);    /* P(case|prev_case)·P(b|case) */
+AuxChannel *aux_whitespace_phase_new(double alpha);/* P(b|단어 내 위치 phase) */
+
+/* 여러 채널을 순차 blend 로 결합 (adjust 가 체이닝됨). chs 인스턴스 소유권은 호출자.
+ * 최대 8개. */
+AuxChannel *aux_combo_new(AuxChannel **chs, int n);
+
+void aux_free(AuxChannel *ch);          /* 단일 채널/combo 본체 해제 (combo 자식은 별도) */
 
 /* bt_v4 + symdist(합=1) + 채널 blend 를 묶은 CecBT.
  * bt_v4_init() 과 ch->reset() 을 수행하므로 인코드/디코드 직전 동일 시작점을 보장한다.
