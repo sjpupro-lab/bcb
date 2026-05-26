@@ -2,12 +2,31 @@
  * Copyright (c) 2026 호시 <jahyag@gmail.com>
  * Licensed under the MIT License. See LICENSE.
  */
-/* aux.c — v4 byte_type 채널 구현 */
+/* aux.c — v4 보조채널 (단계 4: 정수 전용 blend + v3 정수 BT 연결) */
 #include "aux.h"
 #include "symdist.h"
-#include "bt_model.h"
+#include "btv3.h"
 #include <stdlib.h>
 #include <string.h>
+
+#define A_DEN  (1u<<16)   /* alpha 분모 (Q16) */
+
+/* 정수 blend: P_final = α·P_BT + (1−α)·prior. prior_w[b] 는 scale 기준 정수 폭.
+ * cum 을 in-place 갱신 후 symdist_normalize 로 총합 scale·각 빈≥1 보장(무손실 안전). */
+static void blend_into(uint32_t *cum, uint32_t scale, uint32_t A, const uint32_t *prior_w) {
+    uint32_t total_bt = cum[256];
+    if (total_bt == 0) return;
+    uint64_t acc = 0; uint32_t nc[257];
+    for (int b = 0; b < 256; b++) {
+        uint32_t wbt = cum[b+1] - cum[b];
+        uint64_t pbt_s = (uint64_t)wbt * scale / total_bt;          /* α 항: P_BT·scale */
+        uint64_t nw = ((uint64_t)A*pbt_s + (uint64_t)(A_DEN-A)*prior_w[b]) / A_DEN;
+        nc[b] = (uint32_t)acc; acc += (uint32_t)nw;
+    }
+    nc[256] = (uint32_t)acc;
+    memcpy(cum, nc, sizeof(uint32_t)*257);
+    symdist_normalize(cum, scale);
+}
 
 /* ── byte type 분류 (영어 텍스트 거시 통계용) ───────────────── */
 #define NTYPES 7
@@ -58,33 +77,18 @@ static void bt_observe(AuxChannel *self, uint8_t b) {
 
 static void bt_adjust(AuxChannel *self, uint32_t *cum, uint32_t scale) {
     ByteTypeState *s = (ByteTypeState*)self->state;
-    uint32_t total_bt = cum[256];
-    if (total_bt == 0) return;
-
     int pt = s->prev_type;
-    double inv_trans = s->trans_tot[pt] ? 1.0 / (double)s->trans_tot[pt] : 0.0;
-    double alpha = self->alpha;
-
-    uint64_t acc = 0;
-    uint32_t newcum[257];
-    for (int b = 0; b < 256; b++) {
-        uint32_t wbt = cum[b + 1] - cum[b];
-        double pbt = (double)wbt / (double)total_bt;
-
+    /* P(type|pt)·scale 를 type별 1회 계산 */
+    uint32_t PT_w[NTYPES];
+    for (int t=0;t<NTYPES;t++)
+        PT_w[t] = s->trans_tot[pt] ? (uint32_t)((uint64_t)scale*s->trans[pt][t]/s->trans_tot[pt])
+                                   : scale/NTYPES;
+    uint32_t prior_w[256];
+    for (int b=0;b<256;b++) {
         int t = byte_type((uint8_t)b);
-        double ptype = inv_trans ? (double)s->trans[pt][t] * inv_trans : (1.0 / NTYPES);
-        double pbyte = s->type_tot[t] ? (double)s->bytecnt[t][b] / (double)s->type_tot[t] : 0.0;
-        double prior = ptype * pbyte;
-
-        double pf = alpha * pbt + (1.0 - alpha) * prior;
-        uint32_t wf = (uint32_t)(pf * (double)scale);
-        newcum[b] = (uint32_t)acc;
-        acc += wf;
+        prior_w[b] = s->type_tot[t] ? (uint32_t)((uint64_t)PT_w[t]*s->bytecnt[t][b]/s->type_tot[t]) : 0;
     }
-    newcum[256] = (uint32_t)acc;
-
-    memcpy(cum, newcum, sizeof(uint32_t) * 257);
-    symdist_normalize(cum, scale);   /* 총합 scale, 각 빈≥1 보장 → 무손실 안전 */
+    blend_into(cum, scale, self->alpha_q16, prior_w);
 }
 
 AuxChannel *aux_byte_type_new(double alpha) {
@@ -96,7 +100,7 @@ AuxChannel *aux_byte_type_new(double alpha) {
     ch->adjust = bt_adjust;
     ch->observe = bt_observe;
     ch->reset = bt_reset;
-    ch->alpha = alpha;
+    ch->alpha_q16 = (uint32_t)(alpha * (double)A_DEN + 0.5);   /* 생성 시 1회 변환 */
     bt_reset(ch);
     return ch;
 }
@@ -142,22 +146,17 @@ static void bg_observe(AuxChannel *self, uint8_t b) {
 }
 static void bg_adjust(AuxChannel *self, uint32_t *cum, uint32_t scale) {
     BigramState *s = (BigramState*)self->state;
-    uint32_t total_bt = cum[256]; if (total_bt == 0) return;
     int pt2 = s->pt2, pt1 = s->pt1;
-    double inv = s->trans2_tot[pt2][pt1] ? 1.0 / (double)s->trans2_tot[pt2][pt1] : 0.0;
-    double alpha = self->alpha;
-    uint64_t acc = 0; uint32_t nc[257];
-    for (int b = 0; b < 256; b++) {
-        double pbt = (double)(cum[b + 1] - cum[b]) / (double)total_bt;
+    uint32_t tot2 = s->trans2_tot[pt2][pt1];
+    uint32_t PT_w[NTYPES];
+    for (int t=0;t<NTYPES;t++)
+        PT_w[t] = tot2 ? (uint32_t)((uint64_t)scale*s->trans2[pt2][pt1][t]/tot2) : scale/NTYPES;
+    uint32_t prior_w[256];
+    for (int b=0;b<256;b++) {
         int t = byte_type((uint8_t)b);
-        double ptype = inv ? (double)s->trans2[pt2][pt1][t] * inv : (1.0 / NTYPES);
-        double pbyte = s->type_tot[t] ? (double)s->bytecnt[t][b] / (double)s->type_tot[t] : 0.0;
-        double pf = alpha * pbt + (1.0 - alpha) * (ptype * pbyte);
-        nc[b] = (uint32_t)acc; acc += (uint32_t)(pf * (double)scale);
+        prior_w[b] = s->type_tot[t] ? (uint32_t)((uint64_t)PT_w[t]*s->bytecnt[t][b]/s->type_tot[t]) : 0;
     }
-    nc[256] = (uint32_t)acc;
-    memcpy(cum, nc, sizeof(uint32_t) * 257);
-    symdist_normalize(cum, scale);
+    blend_into(cum, scale, self->alpha_q16, prior_w);
 }
 
 /* ════════════════════════════════════════════════════════════
@@ -200,22 +199,16 @@ static void cs_observe(AuxChannel *self, uint8_t b) {
 }
 static void cs_adjust(AuxChannel *self, uint32_t *cum, uint32_t scale) {
     CaseState *s = (CaseState*)self->state;
-    uint32_t total_bt = cum[256]; if (total_bt == 0) return;
     int pc = s->prev;
-    double inv = s->trans_tot[pc] ? 1.0 / (double)s->trans_tot[pc] : 0.0;
-    double alpha = self->alpha;
-    uint64_t acc = 0; uint32_t nc[257];
-    for (int b = 0; b < 256; b++) {
-        double pbt = (double)(cum[b + 1] - cum[b]) / (double)total_bt;
+    uint32_t PC_w[NCASE];
+    for (int c=0;c<NCASE;c++)
+        PC_w[c] = s->trans_tot[pc] ? (uint32_t)((uint64_t)scale*s->trans[pc][c]/s->trans_tot[pc]) : scale/NCASE;
+    uint32_t prior_w[256];
+    for (int b=0;b<256;b++) {
         int c = case_class((uint8_t)b);
-        double pcls = inv ? (double)s->trans[pc][c] * inv : (1.0 / NCASE);
-        double pbyte = s->cls_tot[c] ? (double)s->bytecnt[c][b] / (double)s->cls_tot[c] : 0.0;
-        double pf = alpha * pbt + (1.0 - alpha) * (pcls * pbyte);
-        nc[b] = (uint32_t)acc; acc += (uint32_t)(pf * (double)scale);
+        prior_w[b] = s->cls_tot[c] ? (uint32_t)((uint64_t)PC_w[c]*s->bytecnt[c][b]/s->cls_tot[c]) : 0;
     }
-    nc[256] = (uint32_t)acc;
-    memcpy(cum, nc, sizeof(uint32_t) * 257);
-    symdist_normalize(cum, scale);
+    blend_into(cum, scale, self->alpha_q16, prior_w);
 }
 
 /* ════════════════════════════════════════════════════════════
@@ -251,20 +244,12 @@ static void ws_observe(AuxChannel *self, uint8_t b) {
 }
 static void ws_adjust(AuxChannel *self, uint32_t *cum, uint32_t scale) {
     WsState *s = (WsState*)self->state;
-    uint32_t total_bt = cum[256]; if (total_bt == 0) return;
     int p = s->phase < PMAX ? s->phase : PMAX;
-    double inv = s->phase_tot[p] ? 1.0 / (double)s->phase_tot[p] : 0.0;
-    double alpha = self->alpha;
-    uint64_t acc = 0; uint32_t nc[257];
-    for (int b = 0; b < 256; b++) {
-        double pbt = (double)(cum[b + 1] - cum[b]) / (double)total_bt;
-        double prior = inv ? (double)s->bytecnt[p][b] * inv : (1.0 / 256.0);
-        double pf = alpha * pbt + (1.0 - alpha) * prior;
-        nc[b] = (uint32_t)acc; acc += (uint32_t)(pf * (double)scale);
-    }
-    nc[256] = (uint32_t)acc;
-    memcpy(cum, nc, sizeof(uint32_t) * 257);
-    symdist_normalize(cum, scale);
+    uint32_t tot = s->phase_tot[p];
+    uint32_t prior_w[256];
+    for (int b=0;b<256;b++)
+        prior_w[b] = tot ? (uint32_t)((uint64_t)scale*s->bytecnt[p][b]/tot) : scale/256;
+    blend_into(cum, scale, self->alpha_q16, prior_w);
 }
 
 /* 공통 생성 헬퍼 */
@@ -278,7 +263,7 @@ static AuxChannel *mk(size_t state_sz, double alpha,
     ch->state = calloc(1, state_sz);
     if (!ch->state) { free(ch); return NULL; }
     ch->learn = learn; ch->adjust = adjust; ch->observe = observe; ch->reset = reset;
-    ch->alpha = alpha;
+    ch->alpha_q16 = (uint32_t)(alpha * (double)A_DEN + 0.5);
     reset(ch);
     return ch;
 }
@@ -325,25 +310,25 @@ AuxChannel *aux_combo_new(AuxChannel **chs, int n) {
     s->n = n;
     ch->state = s;
     ch->learn = cb_learn; ch->adjust = cb_adjust; ch->observe = cb_observe; ch->reset = cb_reset;
-    ch->alpha = 1.0;
+    ch->alpha_q16 = A_DEN;   /* 미사용 (자식별 α 적용) */
     return ch;
 }
 
-/* ── CecBT 통합 ─────────────────────────────────────────────── */
+/* ── CecBT 통합 (v3 정수 BT) ─────────────────────────────────── */
 static void aux_dist(uint32_t *cum, uint32_t scale, void *user) {
     AuxChannel *ch = (AuxChannel*)user;
-    bt_v4_distribution(cum, scale);
+    bt_v3_distribution(cum, scale);
     symdist_normalize(cum, scale);     /* v1 (a) */
     ch->adjust(ch, cum, scale);        /* v4 blend */
 }
 static void aux_train(uint8_t b, void *user) {
     AuxChannel *ch = (AuxChannel*)user;
-    bt_v4_train(b);
+    bt_v3_train(b);
     ch->observe(ch, b);
 }
 
 CecBT aux_cec_bt(AuxChannel *ch) {
-    bt_v4_init();
+    bt_v3_init();
     ch->reset(ch);
     CecBT bt;
     bt.distribution = aux_dist;
@@ -354,5 +339,5 @@ CecBT aux_cec_bt(AuxChannel *ch) {
 
 void aux_prime(AuxChannel *ch, const uint8_t *corpus, size_t len) {
     ch->learn(ch, corpus, len);
-    for (size_t i = 0; i < len; i++) bt_v4_train(corpus[i]);
+    for (size_t i = 0; i < len; i++) bt_v3_train(corpus[i]);
 }

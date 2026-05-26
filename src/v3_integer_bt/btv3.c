@@ -17,32 +17,43 @@
  */
 #include <string.h>
 #include <stdlib.h>
-#include <math.h>
 #include <stdint.h>
 #include "btv3.h"
+/* 단계 4: libm 제거 — LUT 는 정수 fixed-point 로 생성 (no <math.h>). */
 
-#define BT_POOL       (8*1024*1024)
-#define BT_SLOTS      (1<<24)
+/* ── 크기 설정: 데스크톱 기본 vs MCU(-DBCB_MCU) ──────────────
+ * MCU: pool 64K(~2MB) / bloom 256K bit / ctx 16K / LUT 4K — ESP32·RP2040 대응. */
+#ifdef BCB_MCU
+  #define BT_POOL     (64*1024)
+  #define BT_SLOTS    (1<<17)         /* 128K (load ≤0.5) */
+  #define BLOOM_BITS  (1<<18)         /* 256K bit */
+  #define CTX_POOL    (16*1024)
+  #define CTX_SLOTS   (1<<15)         /* 32K */
+  #define PRES_BITS   12              /* CONF_LOG2 4096 entries */
+  #define EXP2_FB     12              /* EXP2_FRAC 4096 entries */
+#else
+  #define BT_POOL     (8*1024*1024)
+  #define BT_SLOTS    (1<<24)
+  #define BLOOM_BITS  (1<<24)
+  #define CTX_POOL    (4*1024*1024)
+  #define CTX_SLOTS   (1<<23)
+  #define PRES_BITS   16
+  #define EXP2_FB     16
+#endif
 #define BT_SLOT_MASK  (BT_SLOTS-1)
 #define BT_MAX_DEPTH  24
 #define BT_LEVELS_V4  6
-#define BLOOM_BITS    (1<<24)
 #define BLOOM_MASK    (BLOOM_BITS-1)
-
-#define CTX_POOL      (4*1024*1024)
-#define CTX_SLOTS     (1<<23)
 #define CTX_SLOT_MASK (CTX_SLOTS-1)
 
 /* ── 고정소수 파라미터 ───────────────────────────────────── */
 #define LOG2_FB    16                 /* log2 값 Q16 */
-#define PRES_BITS  16                 /* p 양자화 해상도 (CONF_LOG2 인덱스) */
-#define PRES       (1<<PRES_BITS)
+#define PRES       (1<<PRES_BITS)     /* p 양자화 해상도 (CONF_LOG2 인덱스) */
 #define WBITS      28                 /* 가중치 스케일 Q28 */
 #define WSCALE     ((int64_t)1<<WBITS)
 #define PBITS      28                 /* 확률 스케일 Q28 */
 #define PSCALE     ((int64_t)1<<PBITS)
-#define EXP2_FB    16                 /* EXP2 분수부 해상도 */
-#define EXP2_FN    (1<<EXP2_FB)
+#define EXP2_FN    (1<<EXP2_FB)       /* EXP2 분수부 해상도 */
 #define CONF_EXP   20                 /* conf 지수 */
 
 typedef struct { unsigned char ctx[BT_MAX_DEPTH]; unsigned char ctx_len, next_byte; unsigned int freq; int ctx_next; } BtEntry;
@@ -70,12 +81,12 @@ static BtLevel LEVELS[BT_LEVELS_V4] = {
 
 static inline unsigned int fnv(const unsigned char *d, int n){unsigned int h=2166136261u;for(int i=0;i<n;i++){h^=d[i];h*=16777619u;}return h;}
 
-/* 2^(norm_q16), norm<=0 → (0, WSCALE] 정수 */
+/* 2^(norm_q16), norm<=0 → (0, WSCALE] 정수. EXP2_FB(≤LOG2_FB) 해상도로 분수부 인덱싱. */
 static inline int64_t exp2_w(int64_t norm_q16){
     int64_t neg = -norm_q16;                 /* >=0, Q16 */
     int ip = (int)(neg >> LOG2_FB);
     if (ip >= 40) return 0;
-    int fr = (int)(neg & (EXP2_FN-1));
+    int fr = (int)((neg >> (LOG2_FB - EXP2_FB)) & (EXP2_FN-1));
     return (int64_t)EXP2_FRAC[fr] >> ip;
 }
 
@@ -152,20 +163,51 @@ static void bt_update(const unsigned char *ctx, int cl, unsigned char next){
     }
 }
 
+/* 정수 sqrt (uint64) */
+static uint64_t isqrt64(uint64_t x){
+    uint64_t r=0, bit=1ULL<<62;
+    while(bit>x) bit>>=2;
+    while(bit){ if(x>=r+bit){ x-=r+bit; r=(r>>1)+bit; } else r>>=1; bit>>=2; }
+    return r;
+}
+/* log2(real)·2^16, 입력 x 는 Q16 (x=real·2^16, real>=1). libm 없이 정수만. */
+static int32_t log2_q16(uint32_t x){
+    int msb=0; uint32_t t=x; while(t>1){t>>=1;msb++;}   /* floor(log2(x)) */
+    int ip = msb - 16;                                  /* real 정수부 */
+    int32_t res = ip;                                   /* loop 가 16회 <<1 하며 Q16 완성 */
+    uint64_t m = (ip>=0) ? ((uint64_t)x >> ip) : ((uint64_t)x << (-ip)); /* mantissa∈[2^16,2^17) */
+    for(int i=0;i<16;i++){
+        m = (m*m) >> 16;
+        res <<= 1;
+        if(m >= (1u<<17)){ m >>= 1; res |= 1; }
+    }
+    return res;
+}
 static void build_luts(void){
     if(!CONF_LOG2)  CONF_LOG2  = (int32_t*)malloc(sizeof(int32_t)*PRES);
     if(!EXP2_FRAC)  EXP2_FRAC  = (int32_t*)malloc(sizeof(int32_t)*EXP2_FN);
-    double l2e = 1.0/log(2.0);
-    for(int n=0;n<=BT_MAX_DEPTH;n++)
-        EXP_LOG2[n] = (int32_t)llround((double)n * l2e * (double)(1<<LOG2_FB));
+
+    /* EXP_LOG2[n] = n·log2(e)·2^16, log2(e)·2^16 = round(1.4426950409·65536) = 94548 */
+    for(int n=0;n<=BT_MAX_DEPTH;n++) EXP_LOG2[n] = (int32_t)n * 94548;
+
+    /* CONF_LOG2[i] = 20·log2(conf)·2^16, conf = (i+0.5)/PRES·256, clamp≥1.
+     * conf 의 Q16 표현: conf_q16 = (i+0.5)/PRES·256·2^16 = (2i+1)·128·2^16/PRES.  */
     for(int i=0;i<PRES;i++){
-        double p = ((double)i + 0.5)/(double)PRES;     /* p 의 대표값 */
-        double conf = p*256.0; if(conf<1.0) conf=1.0;
-        CONF_LOG2[i] = (int32_t)llround((double)CONF_EXP * (log(conf)*l2e) * (double)(1<<LOG2_FB));
+        uint64_t conf_q16 = ((uint64_t)(2*i+1) * 128ULL * (1u<<LOG2_FB)) / PRES;
+        if(conf_q16 < (1u<<LOG2_FB)) conf_q16 = (1u<<LOG2_FB);   /* clamp conf≥1 */
+        CONF_LOG2[i] = (int32_t)(CONF_EXP * log2_q16((uint32_t)conf_q16));
     }
+
+    /* EXP2_FRAC[f] = 2^(-f/EXP2_FN)·WSCALE.  TWO_POW[k]=2^(2^-k) 를 정수 sqrt 로 생성. */
+    uint64_t two_pow[17];
+    two_pow[0] = (uint64_t)2 << LOG2_FB;                 /* 2^1 in Q16 */
+    for(int k=1;k<=16;k++) two_pow[k] = isqrt64(two_pow[k-1] << LOG2_FB);
     for(int f=0;f<EXP2_FN;f++){
-        double frac = (double)f/(double)EXP2_FN;       /* [0,1) */
-        EXP2_FRAC[f] = (int32_t)llround(pow(2.0, -frac) * (double)WSCALE);
+        /* frac_q16 = f·2^16/EXP2_FN. e2 = 2^frac in Q16 via bit 분해 */
+        uint32_t frac_q16 = (uint32_t)(((uint64_t)f << LOG2_FB) / EXP2_FN);
+        uint64_t e2 = 1u << LOG2_FB;
+        for(int k=1;k<=16;k++) if(frac_q16 & (1u<<(LOG2_FB-k))) e2 = (e2*two_pow[k]) >> LOG2_FB;
+        EXP2_FRAC[f] = (int32_t)(((uint64_t)WSCALE << LOG2_FB) / e2);   /* WSCALE·2^(-frac) */
     }
 }
 
@@ -290,6 +332,28 @@ void bt_v3_distribution(unsigned int *cum_out, unsigned int scale) {
     cum_out[256] = acc;
 }
 unsigned long bt_v3_entries(void){return g_pool_used;}
+
+unsigned long bt_v3_footprint(BtV3Mem *m){
+    BtV3Mem t;
+    t.bt_pool   = (unsigned long)sizeof(BtEntry)*BT_POOL;
+    t.bt_slot   = (unsigned long)sizeof(int)*BT_SLOTS;
+    t.ctx_pool  = (unsigned long)sizeof(CtxEntry)*CTX_POOL;
+    t.ctx_slot  = (unsigned long)sizeof(int)*CTX_SLOTS;
+    t.bloom     = BLOOM_BITS/8;
+    t.luts      = (unsigned long)sizeof(int32_t)*(PRES+EXP2_FN);
+    t.total = t.bt_pool+t.bt_slot+t.ctx_pool+t.ctx_slot+t.bloom+t.luts;
+    t.bt_entry_sz = sizeof(BtEntry);
+    t.ctx_entry_sz = sizeof(CtxEntry);
+    t.bt_pool_n = BT_POOL; t.ctx_pool_n = CTX_POOL; t.bloom_bits = BLOOM_BITS;
+    t.lut_n = PRES;
+#ifdef BCB_MCU
+    t.is_mcu = 1;
+#else
+    t.is_mcu = 0;
+#endif
+    if(m) *m = t;
+    return t.total;
+}
 
 static void v3_dist(unsigned int *cum, unsigned int scale, void *u){ (void)u; bt_v3_distribution(cum,scale); }
 static void v3_train(unsigned char b, void *u){ (void)u; bt_v3_train(b); }

@@ -24,6 +24,14 @@ void bt_v3_train(unsigned char b);
 void bt_v3_distribution(unsigned int *cum, unsigned int scale);
 unsigned long bt_v3_entries(void);
 
+/* 메모리 footprint 분해 (컴파일된 설정 기준; -DBCB_MCU 여부 포함) */
+typedef struct {
+    unsigned long bt_pool, bt_slot, ctx_pool, ctx_slot, bloom, luts, total;
+    unsigned long bt_entry_sz, ctx_entry_sz, bt_pool_n, ctx_pool_n, bloom_bits, lut_n;
+    int is_mcu;
+} BtV3Mem;
+unsigned long bt_v3_footprint(BtV3Mem *m);   /* total bytes 반환, m 채움(NULL 가능) */
+
 /* bt_v3 를 쓰는 CecBT (bt_v3_init() 수행) */
 CecBT btv3_cec_bt(void);
 

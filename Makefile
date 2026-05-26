@@ -51,8 +51,8 @@ test: $(BUILD)/test_roundtrip
 v1-compare: $(BUILD)/test_v1_compare
 	./$(BUILD)/test_v1_compare $(CORPUS)
 
-$(BUILD)/test_v4_aux: tests/test_v4_aux.c $(V0_SRC) $(V1_SRC) $(V4_SRC) | $(BUILD)
-	$(CC) $(CFLAGS) $(V0_INC) $(V1_INC) $(V4_INC) -o $@ $^ $(LDLIBS)
+$(BUILD)/test_v4_aux: tests/test_v4_aux.c $(V0_SRC) $(V1_SRC) $(V3_SRC) $(V4_SRC) | $(BUILD)
+	$(CC) $(CFLAGS) $(V0_INC) $(V1_INC) $(V3_INC) $(V4_INC) -o $@ $^ $(LDLIBS)
 
 # v4 byte_type distribution blend ablation (baseline vs +aux, 4권)
 v4-aux: $(BUILD)/test_v4_aux
@@ -71,6 +71,18 @@ $(BUILD)/test_v3_scale: tests/test_v3_scale.c $(V0_SRC) $(V3_SRC) | $(BUILD)
 # v3 open addressing 대규모 학습 스케일링 (v0 vs v3 학습시간)
 v3-scale: $(BUILD)/test_v3_scale
 	./$(BUILD)/test_v3_scale
+
+$(BUILD)/bcb-meminfo: tools/bcb-meminfo.c $(V0_SRC) $(V3_SRC) | $(BUILD)
+	$(CC) $(CFLAGS) $(V0_INC) $(V3_INC) -o $@ $^ $(LDLIBS)
+
+$(BUILD)/bcb-meminfo-mcu: tools/bcb-meminfo.c $(V0_SRC) $(V3_SRC) | $(BUILD)
+	$(CC) $(CFLAGS) -DBCB_MCU $(V0_INC) $(V3_INC) -o $@ $^ $(LDLIBS)
+
+# v3 메모리 footprint + 무손실 점검: 데스크톱 / MCU 두 설정
+meminfo: $(BUILD)/bcb-meminfo $(BUILD)/bcb-meminfo-mcu
+	./$(BUILD)/bcb-meminfo
+	@echo ""
+	./$(BUILD)/bcb-meminfo-mcu
 
 bench: $(BUILD)/bcb-bench
 	./$(BUILD)/bcb-bench $(CORPUS)

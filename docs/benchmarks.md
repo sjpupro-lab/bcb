@@ -213,14 +213,34 @@ v0 vs 정수 v3 (`make v3-compare`, 50KB, 4권):
 (byte별 정규화로 단계2 의 74× 보다 작업량↑이나 double 제거가 목표). 대규모 학습도 정수 버전에서
 1M 까지 무손실 유지(`make v3-scale`: 50K 2.36× / 200K 2.67× / 500K 2.84× / 1M 2.65×).
 
+## v3 단계 4 — libm 제거 + aux 정수화 + MCU 빌드
+
+- **libm 제거**: LUT(`EXP_LOG2`/`CONF_LOG2`/`EXP2_FRAC`) 를 정수 `log2`/`exp2`(integer sqrt 기반)
+  로 init 에서 생성. `<math.h>` 불필요. v3-compare 결과 libm 버전과 **동일**(−0.13%) — 정수 LUT 정확.
+- **aux 정수화** (`make v4-aux`): blend 를 Q16 α + 정수 prior 폭으로 재작성(`double` 제거),
+  v3 정수 BT 위에서 측정. 4권, 50KB 학습, baseline=v3 단독:
+
+| 채널 | 개선 |
+|------|------|
+| byte_type | +1.01% |
+| bigram | +1.11% |
+| case | +0.95% |
+| whitespace | +1.08% |
+| **combo(4)** | **+2.94%** |
+
+전부 무손실. 정수 파이프라인(v3 BT + symdist + 정수 aux)에서 combo +2.94% — 기대 범위(+1.5~3%) 상단.
+
+- **MCU 빌드** (`make meminfo`, `-DBCB_MCU`): footprint **546.5MB → 3.56MB**, 무손실 유지
+  (압축비는 pool 포화로 desktop 4.55× → MCU 3.06×). 상세 `docs/mcu.md`.
+
 ### 결정 요약
 
 - **v2 (시계계층)**: 폐기.
-- **v3 (정수 BT)**: 단계별 진행. **단계 1·2·3 완료** — distribution caching + open addressing +
-  정수 hot path(log-domain). v0 대비 −0.13%(±0.5% 이내), 28.5× 가속, 1M 학습 무손실.
-  다음: (4) aux 정수화 + MCU const 베이크. (남은 병목: BT_POOL 8M 포화 — pool 확대 검토.)
-- **v4 (보조채널)**: distribution blend 방식 `AuxChannel` 라이브러리. 4채널 **측정 완료** —
-  단독 +0.6~0.8%, combo **+2.60%** (무손실). 다음: v3 정수화와 결합.
+- **v3 (정수 BT)**: **단계 1~4 완료** — distribution caching + open addressing + 정수 hot path +
+  libm 제거 + MCU 빌드. v0 대비 −0.13%(±0.5% 이내), hot path/LUT 정수, 1M 학습 무손실, MCU 3.56MB.
+  (남은 병목: BT_POOL 포화 — pool 확대 검토.)
+- **v4 (보조채널)**: distribution blend `AuxChannel` 라이브러리, 정수화 완료. 정수 v3 파이프라인에서
+  단독 +0.95~1.11%, **combo +2.94%** (무손실).
 
 ### 원 레퍼런스 (다른 발췌)
 

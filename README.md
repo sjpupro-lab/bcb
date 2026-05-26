@@ -67,6 +67,8 @@ make v1-compare   # v0 vs v1a (합=1) ablation
 make v4-aux       # v1a vs +byte_type blend ablation (4권)
 make v3-compare   # v0 vs v3: 동등성·속도 (4권)
 make v3-scale     # v3 대규모 학습 스케일링 (open addressing)
+make v4-aux       # 보조채널 ablation (정수, v3 파이프라인)
+make meminfo      # v3 메모리 footprint (desktop / MCU) + 무손실 점검
 ```
 
 요구사항: C99 컴파일러 + libm (`-lm`). 외부 라이브러리 의존성 없음.
@@ -87,8 +89,8 @@ build/bcb-cli decode out.bcb  restored.txt -t tests/corpus/pride_and_prejudice.t
 ```
 src/v0_baseline/      range coder + 24-byte context n-gram BT (현재 baseline)
 src/v1_symmetric_dist/  합=1 강제 (단계 a 채택, +0.3%)
-src/v3_integer_bt/      최적화 BT — caching+open addr+정수 hot path (28× 가속, v0 −0.13%)
-src/v4_aux_channel/     보조채널 — distribution blend 방식 (작업 예정)
+src/v3_integer_bt/      정수 BT — caching+open addr+정수 hot path+MCU (libm 없음, v0 −0.13%)
+src/v4_aux_channel/     보조채널 — 정수 distribution blend (combo +2.94% on v3)
 tests/                  round-trip + 벤치마크, corpus/ 에 Gutenberg 4권
 tools/                  bcb-cli, bcb-bench
 docs/                   theory.md, benchmarks.md, mcu.md
@@ -102,7 +104,7 @@ bindings/python/        ctypes wrapper (작업 예정)
 - 랜덤 데이터는 압축 불가 (Shannon). BCB 도 못 한다. 정상.
 - 현재 v0 측정값 ≈ BPB 2.0 (약 4× 압축). v4 보조채널, 대규모 학습 등 후속 작업에서 추가 개선 측정 예정.
 - 인코드 속도: v0 ≈ 2 KB/s → v3 에서 distribution caching + 정수화로 ~28× 가속.
-- full BT pool ≈ 256MB+. MCU const-LUT 빌드는 v3 단계4 예정.
+- 메모리: desktop full ≈ 546MB. MCU 빌드(`-DBCB_MCU`) ≈ 3.56MB (무손실, 압축비는 pool 포화로 낮아짐).
 
 ---
 
