@@ -154,8 +154,8 @@ src/v4_aux_channel/     보조채널 (distribution blend)
 src/v5_mmap_prior/      prior 직렬화 + mmap 로드 (frozen)
 tests/scenarios/        작은 메시지 generator (HTTP/IoT/MQTT/log/RPC, http2) + 회귀 baseline
 tests/corpus/           Gutenberg 4권 (레거시 텍스트 벤치)
-tools/                  bcb-cli, bcb-bench, bcb-msgbench, bcb-meminfo, bcb-prior-build, bcb-prior-test, bcb-blockbench, bcb_vs_hpack.py
-docs/                   benchmarks(작은 메시지), use_cases, theory, mcu, benchmarks_legacy, mmap_prior, hpack_comparison
+tools/                  bcb-cli, bcb-bench, bcb-msgbench, bcb-meminfo, bcb-prior-build, bcb-prior-test, bcb-blockbench, bcb-landmark, bcb_vs_hpack.py
+docs/                   benchmarks(작은 메시지), use_cases, theory, mcu, benchmarks_legacy, mmap_prior, hpack_comparison, landmark
 ```
 
 ---

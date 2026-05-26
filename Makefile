@@ -39,7 +39,7 @@ MSG_SIZES ?= 64,128,256,512,1024,2048,4096
 MSG_BYTES ?= 400000
 MSG_SAMPLES ?= 24
 
-.PHONY: all test bench clean msgbench msgbench-md msgbench-check prior prior-equiv prior-rss hpack hpack-docs
+.PHONY: all test bench clean msgbench msgbench-md msgbench-check prior prior-equiv prior-rss hpack hpack-docs landmark
 
 all: $(BUILD)/bcb-cli $(BUILD)/bcb-bench
 
@@ -162,6 +162,17 @@ hpack: $(BUILD)/bcb-prior-build $(BUILD)/bcb-blockbench
 hpack-docs: $(BUILD)/bcb-prior-build $(BUILD)/bcb-blockbench
 	python3 tools/bcb_vs_hpack.py --bcb-build $(BUILD) --train-bytes $(HPACK_TRAIN) \
 	  --write-docs docs/hpack_comparison.md
+
+# ── Landmark Prior Index (PR-1: 수집 + coverage 측정) ──────
+$(BUILD)/bcb-landmark: tools/bcb-landmark.c $(V0_SRC) $(V3_SRC) | $(BUILD)
+	$(CC) $(CFLAGS) $(V0_INC) $(V3_INC) -o $@ $^ $(LDLIBS)
+
+LM_N ?= 8
+landmark: $(BUILD)/bcb-landmark $(addprefix $(BUILD)/corpus_,$(addsuffix .bin,$(SCENARIOS)))
+	@for s in $(SCENARIOS); do \
+	  ./$(BUILD)/bcb-landmark --corpus $(BUILD)/corpus_$$s.bin --train-size $(MSG_TRAIN) \
+	    --n $(LM_N) --md --label $$s; \
+	done
 
 # ── 작은 메시지 벤치마크 ─────────────────────────────────
 $(BUILD)/bcb-msgbench: tools/bcb-msgbench.c $(V0_SRC) $(V3_SRC) | $(BUILD)
