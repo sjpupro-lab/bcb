@@ -6,10 +6,15 @@ brotli+dict, zstd+dict 와 정면 비교한다.
 재현 / Reproduce:
 
 ```sh
-make msgbench        # 사람이 읽는 표 (5개 시나리오)
-make msgbench-md     # 같은 측정을 markdown 표로
-make msgbench-check  # baseline 대비 회귀 검사 (±2%)
+make msgbench           # 사람이 읽는 표 (5개 시나리오): BCB vs brotli+dict vs zstd+dict
+make msgbench-landmark  # 위 + BCB+lm(landmark prior) 열 추가
+make msgbench-md        # 같은 측정을 markdown 표로
+make msgbench-check     # baseline 대비 회귀 검사 (±2%)
 ```
+
+> **landmark prior index**: `--landmark-k` 로 빈출 context 에 sharper cum 을 박으면 BCB 의 승리
+> 구간이 넓어진다(HTTP ~256B, MQTT/RPC ~1KB). 압축비·속도 동시 향상, 무손실. 측정·한계는
+> `docs/landmark.md` 참고.
 
 > 4KB 영어 책 발췌(gzip/bzip2/xz) 기준의 옛 측정과 v0~v4 개발 기록은
 > `docs/benchmarks_legacy.md` 로 옮겼다 (BCB 의 약한 구간, 참고용).
