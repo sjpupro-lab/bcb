@@ -35,4 +35,28 @@ unsigned long bt_v3_footprint(BtV3Mem *m);   /* total bytes 반환, m 채움(NUL
 /* bt_v3 를 쓰는 CecBT (bt_v3_init() 수행) */
 CecBT btv3_cec_bt(void);
 
+/* ── v5 mmap prior 지원 ────────────────────────────────────
+ * 학습된 BT 를 직렬화/복원하기 위한 후크. 분포 계산은 g_ctx_pool/g_ctx_slot/
+ * g_pool/g_bloom + g_window 만 읽으므로(쓰기 전용 g_bt_slot 불필요), 이들을
+ * 외부(파일 mmap) 버퍼로 가리켜 읽기 전용으로 동작시킨다. "frozen" 모드에선
+ * train 이 window 만 전진시키고 pool 을 수정하지 않는다. */
+typedef struct {
+    const void *pool;      unsigned long pool_used;     /* BtEntry[]  */
+    const void *ctx_pool;  unsigned long ctx_used;      /* CtxEntry[] */
+    const void *ctx_slot;  unsigned long ctx_nslots;    /* int[]      */
+    const void *bloom;     unsigned long bloom_bytes;   /* bit array  */
+    const unsigned char *window; int win_len;
+    /* 빌드 호환성 서명 (불일치 시 attach 거부) */
+    unsigned bt_entry_sz, ctx_entry_sz, bt_max_depth, bloom_bits, pres;
+} BtV3Snapshot;
+
+void bt_v3_freeze(int on);              /* train 시 pool 갱신 끄기/켜기 */
+void bt_v3_reset_window(void);          /* context window 비우기 (메시지 독립 인코딩) */
+void bt_v3_export(BtV3Snapshot *s);     /* 학습 후: 현재 globals 포인터/크기 채움 */
+int  bt_v3_attach(const BtV3Snapshot *s); /* globals 를 외부 읽기전용 버퍼로; freeze; 0 ok / -1 서명 불일치 */
+void bt_v3_detach(void);                /* attach 해제 (외부 버퍼 free 안 함) */
+
+/* attach 된 prior 로 동작하는 CecBT (bt_v3_init 호출 안 함) */
+CecBT btv3_cec_bt_from_prior(void);
+
 #endif /* BCB_BTV3_H */

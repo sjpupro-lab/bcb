@@ -72,6 +72,10 @@ HTTP 텍스트 헤더는 LZ 친화적이라 128B 부터 brotli 가 앞선다. **
 - 데스크톱 동적 빌드: 학습 데이터에 비례해 pool 성장 (상한 없음).
 - 여러 데이터 종류에서 round-trip 무손실 검증 (CI `make msgbench-check`).
 - **인코더와 디코더는 같은 학습 prior 를 공유해야 한다.**
+- **mmap prior** (`.bcb-prior`): prior 를 빌드해 파일로 공유 — 재학습 없이 즉시 시작
+  (300KB 학습 prior 기준 3.74s→**0.028s**), 비트 동일·무손실, 프로세스 간 page 공유.
+  단, 단일 프로세스 RSS 는 해시 조회 분산 탓에 <5MB 까지 줄지 않는다(sub-6MB 는 MCU 빌드).
+  상세·정직한 한계: `docs/mmap_prior.md`.
 
 ---
 
@@ -111,6 +115,15 @@ build/bcb-cli encode in.txt out.bcb -t tests/corpus/pride_and_prejudice.txt
 build/bcb-cli decode out.bcb restored.txt -t tests/corpus/pride_and_prejudice.txt
 ```
 
+mmap prior — prior 를 한 번 빌드해 파일로 공유 (재학습 없이 즉시 시작):
+
+```sh
+build/bcb-prior-build train.txt prior.bcb-prior --train-size 50000
+build/bcb-cli encode msg.bin out.bcb --prior prior.bcb-prior
+build/bcb-cli decode out.bcb msg.out --prior prior.bcb-prior
+make prior            # 동등성(in-memory=mmap 비트 동일) + RSS·처리량 측정
+```
+
 레거시 텍스트 벤치(gzip/bzip2/xz vs 4KB 책 발췌)·v0~v4 개발 기록: `make bench`, `docs/benchmarks_legacy.md`.
 
 ---
@@ -124,8 +137,9 @@ build/bcb-cli decode out.bcb restored.txt -t tests/corpus/pride_and_prejudice.tx
 | v2 (시계계층) | carry-tick 좌표를 BT context 에 mix | **폐기** (fragmentation) |
 | **v3** `src/v3_integer_bt` | caching → open addressing → 정수 hot path → libm 제거 + MCU | v0 대비 −0.13%, ~28× 가속, MCU 3.56MB |
 | **v4** `src/v4_aux_channel` | 거시 통계 보조채널 (distribution blend) | combo +2.94%, 무손실 |
+| **v5** `src/v5_mmap_prior` | prior 직렬화 + mmap 로드 (frozen, 읽기 전용) | 비트 동일·무손실, 즉시 시작 |
 
-설계·측정 기록: `docs/theory.md`, `docs/benchmarks.md`, `docs/benchmarks_legacy.md`, `docs/mcu.md`.
+설계·측정 기록: `docs/theory.md`, `docs/benchmarks.md`, `docs/benchmarks_legacy.md`, `docs/mcu.md`, `docs/mmap_prior.md`.
 
 ---
 
@@ -136,10 +150,11 @@ src/v0_baseline/        range coder + n-gram BT (reference)
 src/v1_symmetric_dist/  분포 합=1 정규화
 src/v3_integer_bt/      정수 BT (caching, open addressing, log-domain, MCU)
 src/v4_aux_channel/     보조채널 (distribution blend)
+src/v5_mmap_prior/      prior 직렬화 + mmap 로드 (frozen)
 tests/scenarios/        작은 메시지 generator (HTTP/IoT/MQTT/log/RPC) + 회귀 baseline
 tests/corpus/           Gutenberg 4권 (레거시 텍스트 벤치)
-tools/                  bcb-cli, bcb-bench, bcb-msgbench, bcb-meminfo
-docs/                   benchmarks(작은 메시지), use_cases, theory, mcu, benchmarks_legacy
+tools/                  bcb-cli, bcb-bench, bcb-msgbench, bcb-meminfo, bcb-prior-build, bcb-prior-test
+docs/                   benchmarks(작은 메시지), use_cases, theory, mcu, benchmarks_legacy, mmap_prior
 ```
 
 ---

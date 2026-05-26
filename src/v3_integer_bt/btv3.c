@@ -77,9 +77,11 @@ static unsigned long g_ctx_used, g_ctx_cap, g_ctx_nslots, g_ctx_mask;
 static BtEntry  *g_pool;
 static int      *g_bt_slot;
 static unsigned long g_pool_used, g_pool_cap, g_bt_nslots, g_bt_mask;
-static unsigned char g_bloom[BLOOM_BITS/8];
+static unsigned char *g_bloom;        /* BLOOM_BITS/8 바이트 (init 할당 또는 mmap attach) */
 static unsigned char g_window[BT_MAX_DEPTH];
 static int g_win_len;
+static int g_frozen   = 0;            /* 1 이면 train 이 pool 미수정(window 만 전진) */
+static int g_attached = 0;            /* 1 이면 pool/ctx/slot/bloom 이 외부(mmap) 소유 */
 
 /* LUT (init 에서 생성) */
 static int32_t EXP_LOG2[BT_MAX_DEPTH+1];   /* Q16: log2(exp(n)) */
@@ -263,6 +265,9 @@ static void build_luts(void){
 }
 
 void bt_v3_init(void){
+    /* attach 상태였다면 외부(mmap) 포인터를 버리고 새로 할당받는다 (munmap 은 호출자 책임). */
+    if(g_attached){ g_pool=NULL; g_ctx_pool=NULL; g_ctx_slot=NULL; g_bt_slot=NULL; g_bloom=NULL; g_attached=0; }
+    g_frozen=0;
     /* 시작(또는 고정) 용량으로 (재)할당. 동적 모드에선 이전 실행에서 커진 분을 초기로 되돌린다. */
     g_pool_cap=POOL_CAP0; g_bt_nslots=BT_NSLOTS0; g_bt_mask=g_bt_nslots-1;
     g_ctx_cap=CTX_CAP0;  g_ctx_nslots=CTX_NSLOTS0; g_ctx_mask=g_ctx_nslots-1;
@@ -270,27 +275,33 @@ void bt_v3_init(void){
     g_ctx_pool = (CtxEntry*)realloc(g_ctx_pool, sizeof(CtxEntry)*g_ctx_cap);
     g_bt_slot  = (int*)realloc(g_bt_slot,  sizeof(int)*g_bt_nslots);
     g_ctx_slot = (int*)realloc(g_ctx_slot, sizeof(int)*g_ctx_nslots);
+    if(!g_bloom) g_bloom = (unsigned char*)malloc(BLOOM_BITS/8);
     build_luts();
     memset(g_bt_slot,  -1, sizeof(int)*g_bt_nslots);
     memset(g_ctx_slot, -1, sizeof(int)*g_ctx_nslots);
-    memset(g_bloom, 0, sizeof(g_bloom));
+    memset(g_bloom, 0, BLOOM_BITS/8);
     memset(g_window, 0, sizeof(g_window));
     g_win_len=0; g_ctx_used=0; g_pool_used=0;
 }
 void bt_v3_free(void){
-    free(g_pool); g_pool=NULL;
-    free(g_ctx_pool); g_ctx_pool=NULL;
-    free(g_bt_slot); g_bt_slot=NULL;
-    free(g_ctx_slot); g_ctx_slot=NULL;
+    if(!g_attached){
+        free(g_pool); free(g_ctx_pool); free(g_ctx_slot); free(g_bloom);
+    }
+    g_pool=NULL; g_ctx_pool=NULL; g_ctx_slot=NULL; g_bloom=NULL;
+    free(g_bt_slot); g_bt_slot=NULL;          /* attach 시 미사용·NULL → free(NULL) 안전 */
     free(CONF_LOG2); CONF_LOG2=NULL;
     free(EXP2_FRAC); EXP2_FRAC=NULL;
+    g_attached=0; g_frozen=0;
 }
 void bt_v3_train(unsigned char b){
-    for(int n=1;n<=g_win_len&&n<=BT_MAX_DEPTH;n++)
-        bt_update(g_window+(g_win_len-n),n,b);
+    if(!g_frozen)
+        for(int n=1;n<=g_win_len&&n<=BT_MAX_DEPTH;n++)
+            bt_update(g_window+(g_win_len-n),n,b);
     if(g_win_len<BT_MAX_DEPTH) g_window[g_win_len++]=b;
     else{memmove(g_window,g_window+1,BT_MAX_DEPTH-1);g_window[BT_MAX_DEPTH-1]=b;}
 }
+void bt_v3_freeze(int on){ g_frozen = on?1:0; }
+void bt_v3_reset_window(void){ memset(g_window,0,sizeof(g_window)); g_win_len=0; }
 
 /* 정수 전용 분포 계산. 레벨마다:
  *   pass A — 활성 context 수집 + log2_w 최대값(max_log2) 탐색
@@ -422,4 +433,50 @@ CecBT btv3_cec_bt(void){
     bt_v3_init();
     CecBT bt; bt.distribution=v3_dist; bt.train=v3_train; bt.user=NULL;
     return bt;
+}
+
+/* ── v5 mmap prior: 직렬화/복원 후크 ───────────────────────── */
+void bt_v3_export(BtV3Snapshot *s){
+    if(!s) return;
+    s->pool       = g_pool;       s->pool_used  = g_pool_used;
+    s->ctx_pool   = g_ctx_pool;   s->ctx_used   = g_ctx_used;
+    s->ctx_slot   = g_ctx_slot;   s->ctx_nslots = g_ctx_nslots;
+    s->bloom      = g_bloom;      s->bloom_bytes= BLOOM_BITS/8;
+    s->window     = g_window;     s->win_len    = g_win_len;
+    s->bt_entry_sz=(unsigned)sizeof(BtEntry); s->ctx_entry_sz=(unsigned)sizeof(CtxEntry);
+    s->bt_max_depth=BT_MAX_DEPTH; s->bloom_bits=BLOOM_BITS; s->pres=PRES;
+}
+
+int bt_v3_attach(const BtV3Snapshot *s){
+    if(!s) return -1;
+    if(s->bt_entry_sz!=sizeof(BtEntry) || s->ctx_entry_sz!=sizeof(CtxEntry) ||
+       s->bt_max_depth!=BT_MAX_DEPTH || s->bloom_bits!=BLOOM_BITS ||
+       s->pres!=PRES || s->bloom_bytes!=BLOOM_BITS/8)
+        return -1;                                  /* 빌드 설정 불일치 */
+    /* 외부(읽기전용) 버퍼로 globals 를 가리킨다. g_bt_slot 은 쓰기 전용 → 미사용. */
+    g_pool      = (BtEntry*)s->pool;     g_pool_used  = s->pool_used;
+    g_ctx_pool  = (CtxEntry*)s->ctx_pool;g_ctx_used   = s->ctx_used;
+    g_ctx_slot  = (int*)s->ctx_slot;     g_ctx_nslots = s->ctx_nslots; g_ctx_mask = g_ctx_nslots-1;
+    g_bloom     = (unsigned char*)s->bloom;
+    g_bt_slot   = NULL;
+    g_pool_cap  = g_pool_used; g_ctx_cap = g_ctx_used; g_bt_nslots = 0; g_bt_mask = 0;
+    build_luts();                                   /* LUT 는 RAM 에 재생성(결정적) */
+    int wl = s->win_len; if(wl<0) wl=0; if(wl>BT_MAX_DEPTH) wl=BT_MAX_DEPTH;
+    memcpy(g_window, s->window, (size_t)wl);
+    g_win_len = wl;
+    g_attached = 1; g_frozen = 1;
+    return 0;
+}
+
+void bt_v3_detach(void){
+    g_pool=NULL; g_ctx_pool=NULL; g_ctx_slot=NULL; g_bloom=NULL; g_bt_slot=NULL;
+    g_pool_used=g_ctx_used=0;
+    free(CONF_LOG2); CONF_LOG2=NULL;
+    free(EXP2_FRAC); EXP2_FRAC=NULL;
+    g_attached=0; g_frozen=0;
+}
+
+CecBT btv3_cec_bt_from_prior(void){
+    CecBT bt; bt.distribution=v3_dist; bt.train=v3_train; bt.user=NULL;
+    return bt;                                      /* attach 는 호출자가 먼저 수행 */
 }

@@ -11,6 +11,8 @@
  * 컨테이너 포맷: "BCB1" magic(4) + orig_len(8, LE) + range-coded payload.
  */
 #include "ce_compress.h"
+#include "btv3.h"
+#include "bcb_prior.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -48,21 +50,33 @@ static void prime(CecBT *bt, const char *train_path) {
 
 int main(int argc, char **argv) {
     if (argc < 4) {
-        fprintf(stderr, "usage:\n  %s encode <in> <out> [-t train.txt]\n  %s decode <in> <out> [-t train.txt]\n",
+        fprintf(stderr, "usage:\n"
+                "  %s encode <in> <out> [-t train.txt | --prior file.bcb-prior]\n"
+                "  %s decode <in> <out> [-t train.txt | --prior file.bcb-prior]\n",
                 argv[0], argv[0]);
         return 2;
     }
-    const char *mode = argv[1], *in = argv[2], *out = argv[3], *train = NULL;
-    for (int i = 4; i + 1 < argc; i++)
+    const char *mode = argv[1], *in = argv[2], *out = argv[3], *train = NULL, *prior_path = NULL;
+    for (int i = 4; i + 1 < argc; i++) {
         if (strcmp(argv[i], "-t") == 0) train = argv[i+1];
+        else if (strcmp(argv[i], "--prior") == 0) prior_path = argv[i+1];
+    }
+
+    /* --prior: mmap 된 frozen v3 prior 사용 (encode/decode 양쪽 동일 파일). */
+    BcbPrior *prior = NULL;
+    if (prior_path) {
+        prior = bcb_prior_mmap(prior_path);
+        if (!prior) { fprintf(stderr, "cannot mmap prior %s\n", prior_path); return 1; }
+    }
 
     size_t in_len = 0;
     uint8_t *in_buf = slurp(in, &in_len);
     if (!in_buf) { fprintf(stderr, "cannot read %s\n", in); return 1; }
 
     if (strcmp(mode, "encode") == 0) {
-        CecBT bt = cec_default_bt();
-        prime(&bt, train);
+        CecBT bt;
+        if (prior) bt = bcb_prior_cec_bt(prior);    /* attach 내부 수행 */
+        else { bt = cec_default_bt(); prime(&bt, train); }
         CecEncoder *e = cec_enc_new(&bt);
         for (size_t i = 0; i < in_len; i++) cec_enc_byte(e, in_buf[i]);
         size_t clen = 0;
@@ -82,8 +96,9 @@ int main(int argc, char **argv) {
         if (in_len < 12 || memcmp(in_buf, "BCB1", 4) != 0) { fprintf(stderr, "not a BCB1 file\n"); return 1; }
         uint64_t ol = 0;
         for (int i = 0; i < 8; i++) ol |= (uint64_t)in_buf[4 + i] << (8*i);
-        CecBT bt = cec_default_bt();
-        prime(&bt, train);
+        CecBT bt;
+        if (prior) bt = bcb_prior_cec_bt(prior);
+        else { bt = cec_default_bt(); prime(&bt, train); }
         uint8_t *dec = cec_decompress(in_buf + 12, in_len - 12, (size_t)ol, &bt);
         if (!dec) { fprintf(stderr, "decode failed\n"); return 1; }
         if (dump(out, dec, (size_t)ol) != 0) { fprintf(stderr, "cannot write %s\n", out); return 1; }
@@ -93,6 +108,7 @@ int main(int argc, char **argv) {
         fprintf(stderr, "unknown mode '%s'\n", mode);
         return 2;
     }
+    if (prior) bcb_prior_close(prior);
     free(in_buf);
     return 0;
 }

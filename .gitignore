@@ -1,4 +1,5 @@
 build/
 *.o
 *.bcb
+*.bcb-prior
 tests/corpus/large.txt
