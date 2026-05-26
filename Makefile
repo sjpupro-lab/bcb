@@ -10,6 +10,10 @@ V0_DIR  := src/v0_baseline
 V0_INC  := -I$(V0_DIR)
 V0_SRC  := $(V0_DIR)/ce_compress.c $(V0_DIR)/bt_model.c
 
+V1_DIR  := src/v1_symmetric_dist
+V1_INC  := -I$(V1_DIR)
+V1_SRC  := $(V1_DIR)/symdist.c
+
 BUILD   := build
 CORPUS  := tests/corpus/pride_and_prejudice.txt
 
@@ -29,8 +33,15 @@ $(BUILD)/bcb-bench: tools/bcb-bench.c $(V0_SRC) | $(BUILD)
 $(BUILD)/test_roundtrip: tests/test_roundtrip.c $(V0_SRC) | $(BUILD)
 	$(CC) $(CFLAGS) $(V0_INC) -o $@ $^ $(LDLIBS)
 
+$(BUILD)/test_v1_compare: tests/test_v1_compare.c $(V0_SRC) $(V1_SRC) | $(BUILD)
+	$(CC) $(CFLAGS) $(V0_INC) $(V1_INC) -o $@ $^ $(LDLIBS)
+
 test: $(BUILD)/test_roundtrip
 	./$(BUILD)/test_roundtrip
+
+# v1 합=1 강제 ablation (v0 vs v1a)
+v1-compare: $(BUILD)/test_v1_compare
+	./$(BUILD)/test_v1_compare $(CORPUS)
 
 bench: $(BUILD)/bcb-bench
 	./$(BUILD)/bcb-bench $(CORPUS)
