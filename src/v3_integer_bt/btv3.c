@@ -302,6 +302,12 @@ void bt_v3_train(unsigned char b){
 }
 void bt_v3_freeze(int on){ g_frozen = on?1:0; }
 void bt_v3_reset_window(void){ memset(g_window,0,sizeof(g_window)); g_win_len=0; }
+void bt_v3_set_window(const unsigned char *ctx, int len){
+    if(len<0) len=0;
+    if(len>BT_MAX_DEPTH) len=BT_MAX_DEPTH;
+    memcpy(g_window, ctx, (size_t)len);
+    g_win_len=len;
+}
 
 /* 정수 전용 분포 계산. 레벨마다:
  *   pass A — 활성 context 수집 + log2_w 최대값(max_log2) 탐색
