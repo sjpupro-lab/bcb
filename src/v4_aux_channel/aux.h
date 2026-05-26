@@ -30,7 +30,7 @@ struct AuxChannel {
     void (*observe)(AuxChannel *self, uint8_t b);
     /* 상태 초기화 (counts + prev_type) */
     void (*reset)(AuxChannel *self);
-    double alpha;     /* BT 가중치 (1.0 = aux 무시) */
+    uint32_t alpha_q16;   /* BT 가중치 α, Q16 정수 (65536 = 1.0 = aux 무시) */
     void *state;
 };
 
@@ -46,8 +46,8 @@ AuxChannel *aux_combo_new(AuxChannel **chs, int n);
 
 void aux_free(AuxChannel *ch);          /* 단일 채널/combo 본체 해제 (combo 자식은 별도) */
 
-/* bt_v4 + symdist(합=1) + 채널 blend 를 묶은 CecBT.
- * bt_v4_init() 과 ch->reset() 을 수행하므로 인코드/디코드 직전 동일 시작점을 보장한다.
+/* bt_v3(정수 BT) + symdist(합=1) + 채널 blend 를 묶은 CecBT.
+ * bt_v3_init() 과 ch->reset() 을 수행하므로 인코드/디코드 직전 동일 시작점을 보장한다.
  * user 포인터로 ch 를 전달한다. */
 CecBT aux_cec_bt(AuxChannel *ch);
 

@@ -9,9 +9,8 @@
  * 모든 변형은 round-trip 무손실을 검증한다.
  */
 #include "ce_compress.h"
-#include "symdist.h"
 #include "aux.h"
-#include "bt_model.h"
+#include "btv3.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -38,14 +37,14 @@ static size_t run(AuxChannel *ch, const uint8_t *c, size_t toff, size_t tl,
                   const uint8_t *ex, size_t exlen, int *ok) {
     CecBT bt;
     if (ch) { bt = aux_cec_bt(ch); aux_prime(ch, c + toff, tl); }
-    else    { bt = symdist_bt();  for (size_t i = 0; i < tl; i++) bt_v4_train(c[toff + i]); }
+    else    { bt = btv3_cec_bt(); for (size_t i = 0; i < tl; i++) bt_v3_train(c[toff + i]); }
     CecEncoder *e = cec_enc_new(&bt);
     for (size_t i = 0; i < exlen; i++) cec_enc_byte(e, ex[i]);
     size_t clen = 0; uint8_t *comp = cec_enc_finish(e, &clen); cec_enc_free(e);
 
     CecBT bt2;
     if (ch) { bt2 = aux_cec_bt(ch); aux_prime(ch, c + toff, tl); }
-    else    { bt2 = symdist_bt();  for (size_t i = 0; i < tl; i++) bt_v4_train(c[toff + i]); }
+    else    { bt2 = btv3_cec_bt(); for (size_t i = 0; i < tl; i++) bt_v3_train(c[toff + i]); }
     uint8_t *dec = cec_decompress(comp, clen, exlen, &bt2);
     *ok = (dec && memcmp(dec, ex, exlen) == 0);
     free(dec); free(comp);
