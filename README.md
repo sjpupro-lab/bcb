@@ -86,10 +86,12 @@ matching(brotli/zstd)이 이긴다. **큰 데이터엔 brotli/zstd 를 쓰라.**
   hit 시 predict 를 건너뛴다 — 압축비·속도 동시 향상, 무손실(저장된 정수 cum 을 enc/dec 가 공유).
   실측: **HTTP 헤더 +30~42% & ~4× 속도**, MQTT/syslog +8~16%, **IoT 0%**(byte-context 미적중).
   message 단위 random access 가능(sub-message 는 불가 — 정직한 한계). 상세: `docs/landmark.md`.
-- **structural (position-aware) landmark** (v6, 측정 단계): 고정 레코드 binary 데이터를 *위치별* 분포로
-  압축. 측정(`make structbench`, entropy 추정): binary_record/modbus **+71~73%**, CAN +41%.
-  **IoT 는 배치가 좌우 — per-device stream 에선 pos-delta 6.45× (5×+ 가능)**, 다중 device interleave
-  공유 게이트웨이는 ~2.0×. 인코더 통합은 후속(PR-2). 상세·정직한 한계: `docs/structural_landmark.md`.
+- **structural (position-aware) landmark** (v6, **codec 통합 완료**): 고정 레코드 binary 데이터를
+  *위치별* 분포(byte/delta)로 압축. `--schema-record-size R`. **실측 코딩 바이트 + round-trip 무손실**
+  (`make structural-bench`): binary_record **5.35× (+286%)**, per-device IoT **3.99× (+211%)**,
+  modbus 3.67×, CAN 3.91×, 8-dev IoT 1.83×. delta 모드는 cum 을 `prev_record[p]` 순환 시프트(정수
+  양자화 → 무손실 구조적 보장). 스트림이 길수록 이론치에 근접. 상세: `docs/structural.md`,
+  측정 단계는 `docs/structural_landmark.md`.
 
 ---
 
@@ -167,8 +169,8 @@ src/v4_aux_channel/     보조채널 (distribution blend)
 src/v5_mmap_prior/      prior 직렬화 + mmap 로드 (frozen)
 tests/scenarios/        작은 메시지 generator (HTTP/IoT/MQTT/log/RPC, http2, binary_record/modbus/canbus) + 회귀 baseline
 tests/corpus/           Gutenberg 4권 (레거시 텍스트 벤치)
-tools/                  bcb-cli, bcb-bench, bcb-msgbench, bcb-meminfo, bcb-prior-build, bcb-prior-test, bcb-blockbench, bcb-landmark, bcb_vs_hpack.py, landmark_bench.py
-docs/                   benchmarks(작은 메시지), use_cases, theory, mcu, benchmarks_legacy, mmap_prior, hpack_comparison, landmark, structural_landmark
+tools/                  bcb-cli, bcb-bench, bcb-msgbench, bcb-meminfo, bcb-prior-build, bcb-prior-test, bcb-blockbench, bcb-landmark, bcb-structbench, bcb_vs_hpack.py, landmark_bench.py, structural_bench.py
+docs/                   benchmarks(작은 메시지), use_cases, theory, mcu, benchmarks_legacy, mmap_prior, hpack_comparison, landmark, structural_landmark, structural
 ```
 
 ---

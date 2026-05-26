@@ -72,8 +72,8 @@ int main(int argc, char **argv) {
         clock_gettime(CLOCK_MONOTONIC, &t1);
         enc_sec += (t1.tv_sec - t0.tv_sec) + (t1.tv_nsec - t0.tv_nsec) / 1e9;
 
-        bcb_prior_attach(p); bt_v3_reset_window();
-        unsigned char *dec = cec_decompress(comp, clen, len, &bt);
+        CecBT btd = bcb_prior_cec_bt(p); bt_v3_reset_window();   /* fresh state (structural reset) */
+        unsigned char *dec = cec_decompress(comp, clen, len, &btd);
         if (!dec || (len && memcmp(dec, msg, len) != 0)) lossless = 0;
         free(dec);
 

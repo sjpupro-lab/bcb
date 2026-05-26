@@ -27,3 +27,6 @@ jobs:
 
       - name: landmark prior round-trip lossless (4 scenarios)
         run: make landmark-verify
+
+      - name: structural codec round-trip lossless (binary scenarios)
+        run: make structural-verify

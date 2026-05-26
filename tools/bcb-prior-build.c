@@ -39,10 +39,12 @@ int main(int argc, char **argv) {
     const char *train_path = argv[1], *out_path = argv[2];
     size_t train_size = 0;
     int lm_n = 8; unsigned lm_k = 0;          /* landmark-k 0 = off (기존 동작) */
+    int schema_rec = 0;                        /* record schema (structural) */
     for (int i = 3; i + 1 < argc; i++) {
         if (!strcmp(argv[i], "--train-size")) train_size = (size_t)strtoul(argv[++i], NULL, 10);
         else if (!strcmp(argv[i], "--landmark-n")) lm_n = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--landmark-k")) lm_k = (unsigned)strtoul(argv[++i], NULL, 10);
+        else if (!strcmp(argv[i], "--schema-record-size")) schema_rec = atoi(argv[++i]);
     }
     if (lm_n < 1 || lm_n > 24) { fprintf(stderr, "landmark-n must be 1..24\n"); return 2; }
 
@@ -51,18 +53,23 @@ int main(int argc, char **argv) {
     if (!corpus) { fprintf(stderr, "cannot read %s\n", train_path); return 1; }
     size_t tl = (train_size && train_size < corpus_len) ? train_size : corpus_len;
 
-    CecBT bt = btv3_cec_bt();                    /* init + reset */
+    CecBT bt = btv3_cec_bt();                    /* init + reset (fallback BT) */
     for (size_t i = 0; i < tl; i++) bt.train(corpus[i], bt.user);
 
-    int rc = (lm_k > 0) ? bcb_prior_save_with_landmarks(out_path, lm_n, lm_k)
-                        : bcb_prior_save(out_path);
+    int rc;
+    if (schema_rec > 0)
+        rc = bcb_prior_save_with_schema(out_path, corpus, tl, schema_rec);
+    else if (lm_k > 0)
+        rc = bcb_prior_save_with_landmarks(out_path, lm_n, lm_k);
+    else
+        rc = bcb_prior_save(out_path);
     if (rc != 0) {
         fprintf(stderr, "failed to write %s\n", out_path);
         free(corpus); bt_v3_free();
         return 1;
     }
-    fprintf(stderr, "trained %zu bytes -> %s (%lu BT entries, landmark-k=%u N=%d)\n",
-            tl, out_path, bt_v3_entries(), lm_k, lm_n);
+    fprintf(stderr, "trained %zu bytes -> %s (%lu BT entries, landmark-k=%u N=%d, schema-rec=%d)\n",
+            tl, out_path, bt_v3_entries(), lm_k, lm_n, schema_rec);
     free(corpus);
     bt_v3_free();
     return 0;
