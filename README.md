@@ -65,6 +65,7 @@ make test         # v0 baseline 무손실 round-trip 검증
 make bench        # gzip/bz2/lzma 와 비교 벤치마크
 make v1-compare   # v0 vs v1a (합=1) ablation
 make v4-aux       # v1a vs +byte_type blend ablation (4권)
+make v3-compare   # v0 vs v3 (distribution caching): 동등성·속도 (4권)
 ```
 
 요구사항: C99 컴파일러 + libm (`-lm`). 외부 라이브러리 의존성 없음.
@@ -85,7 +86,7 @@ build/bcb-cli decode out.bcb  restored.txt -t tests/corpus/pride_and_prejudice.t
 ```
 src/v0_baseline/      range coder + 24-byte context n-gram BT (현재 baseline)
 src/v1_symmetric_dist/  합=1 강제 (단계 a 채택, +0.3%)
-src/v3_integer_bt/      정수 전용 BT + 자료구조 최적화, MCU 대응 (작업 예정)
+src/v3_integer_bt/      최적화 BT — 단계1 distribution caching (37.9× 가속, v0 비트동일)
 src/v4_aux_channel/     보조채널 — distribution blend 방식 (작업 예정)
 tests/                  round-trip + 벤치마크, corpus/ 에 Gutenberg 4권
 tools/                  bcb-cli, bcb-bench
