@@ -36,6 +36,13 @@ int bcb_prior_save(const char *path);
  * (window 는 내부에서 보존·복원). 0 ok / -1 실패. */
 int bcb_prior_save_with_landmarks(const char *path, int n, unsigned k);
 
+/* save + record schema(structural landmark): corpus 를 rec_size 로 정렬해 자리별 byte/delta
+ * 분포를 모으고, held-out 으로 자리별 mode 를 정해 정수 양자화 cum 으로 박는다.
+ * 인코더/디코더가 자리 p 에서 동일 cum 사용(델타는 prev_record[p] 순환 시프트) → 무손실.
+ * 0 ok / -1 실패. */
+int bcb_prior_save_with_schema(const char *path, const unsigned char *corpus,
+                               size_t corpus_len, int rec_size);
+
 /* prior 파일을 mmap 으로 로드 (RAM 에 거의 복사 안 함). 실패 시 NULL. */
 BcbPrior *bcb_prior_mmap(const char *path);
 
@@ -45,7 +52,15 @@ void bcb_prior_close(BcbPrior *p);
 /* btv3 를 이 prior 에 attach (frozen 읽기전용). 0 ok / -1 빌드 서명 불일치. */
 int bcb_prior_attach(BcbPrior *p);
 
-/* attach 후 prior 로 인코드/디코드할 CecBT 반환. */
+/* attach 후 prior 로 인코드/디코드할 CecBT 반환. (schema 있으면 structural, 아니면
+ * landmark/BT). 메시지 시작마다 호출하면 structural 상태(position/prev)가 초기화된다. */
 CecBT bcb_prior_cec_bt(BcbPrior *p);
+
+/* structural 메시지 경계 리셋 (position=0, prev record 0). encode/decode 시작 전 호출.
+ * bcb_prior_cec_bt 도 내부에서 호출하므로, 같은 bt 로 재인코딩/디코딩할 때만 별도 필요. */
+void bcb_prior_msg_begin(void);
+
+/* prior 가 record schema 를 가지면 record_size(>0), 없으면 0. */
+int bcb_prior_record_size(const BcbPrior *p);
 
 #endif /* BCB_PRIOR_H */

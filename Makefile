@@ -39,7 +39,7 @@ MSG_SIZES ?= 64,128,256,512,1024,2048,4096
 MSG_BYTES ?= 400000
 MSG_SAMPLES ?= 24
 
-.PHONY: all test bench clean msgbench msgbench-md msgbench-landmark msgbench-check prior prior-equiv prior-rss hpack hpack-docs landmark landmark-verify landmark-bench landmark-bench-docs structbench
+.PHONY: all test bench clean msgbench msgbench-md msgbench-landmark msgbench-check prior prior-equiv prior-rss hpack hpack-docs landmark landmark-verify landmark-bench landmark-bench-docs structbench structural-bench structural-verify
 
 all: $(BUILD)/bcb-cli $(BUILD)/bcb-bench
 
@@ -187,6 +187,24 @@ $(BUILD)/corpus_canbus.bin: $(SCN)/canbus.py | $(BUILD)
 	python3 $< --bytes $(MSG_BYTES) > $@
 $(BUILD)/corpus_iot_single.bin: $(SCN)/iot_packets.py | $(BUILD)
 	python3 $< --bytes $(MSG_BYTES) --devices 1 > $@      # 단일 device stream (per-device 천장)
+
+# 실제 코딩 바이트 — structural codec (base vs schema, round-trip 무손실)
+structural-bench: $(BUILD)/bcb-prior-build $(BUILD)/bcb-blockbench
+	python3 tools/structural_bench.py --build $(BUILD) --recs-per-msg 100
+
+# CI 용 빠른 structural round-trip 무손실 (작은 train)
+structural-verify: $(BUILD)/bcb-prior-build $(BUILD)/bcb-blockbench
+	@fail=0; \
+	for sp in "binary_record.py:32:" "iot_packets.py:18:--devices 1" "modbus.py:25:" "canbus.py:16:"; do \
+	  g=$${sp%%:*}; rest=$${sp#*:}; rec=$${rest%%:*}; ga=$${rest#*:}; \
+	  C=$(BUILD)/sv_$$g.bin; P=$(BUILD)/sv_$$g.prior; B=$(BUILD)/sv_$$g.blocks; \
+	  python3 $(SCN)/$$g --bytes 60000 $$ga > $$C; \
+	  ta=$$(( (20000 / $$rec) * $$rec )); msz=$$(( $$rec * 50 )); \
+	  ./$(BUILD)/bcb-prior-build $$C $$P --train-size $$ta --schema-record-size $$rec >/dev/null 2>&1; \
+	  python3 $(SCN)/chunk.py $$C --train-size $$ta --size $$msz --out $$B --max 100 >/dev/null; \
+	  printf "%-18s " $$g; ./$(BUILD)/bcb-blockbench --prior $$P --blocks $$B 2>&1 >/dev/null | sed 's/enc_ms.*//'; \
+	  ./$(BUILD)/bcb-blockbench --prior $$P --blocks $$B 2>&1 >/dev/null | grep -q 'lossless=yes' || fail=1; \
+	done; [ $$fail -eq 0 ] || { echo "STRUCTURAL VERIFY FAILED"; exit 1; }
 
 structbench: $(BUILD)/bcb-structbench $(BUILD)/corpus_iot_packets.bin $(BUILD)/corpus_iot_single.bin $(BUILD)/corpus_binary_record.bin $(BUILD)/corpus_modbus.bin $(BUILD)/corpus_canbus.bin
 	@./$(BUILD)/bcb-structbench --corpus $(BUILD)/corpus_iot_packets.bin    --record-size 18 --train-size $(MSG_TRAIN) --label "iot (8-dev interleave)"

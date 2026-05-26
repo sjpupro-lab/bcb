@@ -11,14 +11,16 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <math.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 
 #define BCBP_MAGIC   "BCBP"
-#define BCBP_VERSION 2u
-#define LM_SCALE     CEC_RC_SCALE    /* landmark width 합 = range coder scale */
+#define BCBP_VERSION 3u
+#define LM_SCALE     CEC_RC_SCALE    /* landmark/schema width 합 = range coder scale */
+#define SCHEMA_MAX   1024            /* 최대 record_size */
 
 /* 모든 필드 고정폭·LE 가정(동일 아키텍처에서 생성·소비). 8바이트 정렬 유지. */
 typedef struct {
@@ -31,8 +33,12 @@ typedef struct {
     int32_t  win_len;
     uint32_t lm_n;                   /* landmark context 길이 (0 이면 없음) */
     uint64_t lm_k;                   /* landmark 개수 */
+    uint32_t schema_rec;             /* record schema: record_size (0 이면 없음) */
+    uint32_t schema_pos;             /* position 수 (= record_size) */
     uint64_t off_window, off_pool, off_ctx_pool, off_ctx_slot, off_bloom;
     uint64_t off_lm_ctx, off_lm_cum; /* lm_ctx: k*n 바이트, lm_cum: k*256 uint16 */
+    uint64_t off_schema_modes;       /* schema_pos 바이트 (0=byte,1=delta) */
+    uint64_t off_schema_cum;         /* schema_pos*256 uint16 (자리별 width) */
     uint64_t file_size;
 } BcbpHeader;
 
@@ -47,6 +53,11 @@ struct BcbPrior {
     const uint16_t *lm_cum;          /* k*256 widths */
     int            *lm_slot;         /* RAM 해시: hash(ctx)->landmark idx, 크기 lm_nslots */
     unsigned long   lm_nslots, lm_mask;
+    /* record schema (structural landmark) */
+    int             schema_rec;      /* record_size (0 = 없음) */
+    int             schema_pos;
+    const unsigned char *schema_modes;  /* schema_pos: 0=byte,1=delta */
+    const uint16_t *schema_cum;         /* schema_pos*256 widths */
 };
 
 /* save 에 포함할 landmark (caller 가 등록) */
@@ -57,6 +68,14 @@ static const uint16_t *s_lm_cum = NULL;
 
 void bcb_prior_set_landmarks(int n, unsigned k, const unsigned char *ctx, const uint16_t *cum) {
     s_lm_n = n; s_lm_k = k; s_lm_ctx = ctx; s_lm_cum = cum;
+}
+
+/* save 에 포함할 schema (build helper 가 등록) */
+static int             s_sc_rec = 0, s_sc_pos = 0;
+static const unsigned char *s_sc_modes = NULL;
+static const uint16_t *s_sc_cum = NULL;
+static void bcb_prior_set_schema_(int rec, int pos, const unsigned char *modes, const uint16_t *cum) {
+    s_sc_rec = rec; s_sc_pos = pos; s_sc_modes = modes; s_sc_cum = cum;
 }
 
 static unsigned hashN(const unsigned char *c, int n){ unsigned h=2166136261u; for(int i=0;i<n;i++){h^=c[i];h*=16777619u;} return h; }
@@ -88,6 +107,9 @@ int bcb_prior_save(const char *path) {
     uint64_t lm_k        = s_lm_k;
     uint64_t lm_ctx_bytes = lm_k * (uint64_t)lm_n;
     uint64_t lm_cum_bytes = lm_k * 256u * sizeof(uint16_t);
+    int      sc_rec      = s_sc_rec, sc_pos = s_sc_pos;
+    uint64_t sc_modes_bytes = (uint64_t)sc_pos;
+    uint64_t sc_cum_bytes   = (uint64_t)sc_pos * 256u * sizeof(uint16_t);
 
     BcbpHeader h;
     memset(&h, 0, sizeof h);
@@ -100,6 +122,7 @@ int bcb_prior_save(const char *path) {
     h.ctx_nslots = s.ctx_nslots; h.bloom_bytes = bloom_bytes;
     h.win_len = s.win_len;
     h.lm_n = (uint32_t)lm_n; h.lm_k = lm_k;
+    h.schema_rec = (uint32_t)sc_rec; h.schema_pos = (uint32_t)sc_pos;
 
     uint64_t off = align8(sizeof(BcbpHeader));
     h.off_window   = off;                 off = align8(off + s.bt_max_depth);
@@ -109,6 +132,8 @@ int bcb_prior_save(const char *path) {
     h.off_bloom    = off;                 off = align8(off + bloom_bytes);
     h.off_lm_ctx   = off;                 off = align8(off + lm_ctx_bytes);
     h.off_lm_cum   = off;                 off = align8(off + lm_cum_bytes);
+    h.off_schema_modes = off;             off = align8(off + sc_modes_bytes);
+    h.off_schema_cum   = off;             off = align8(off + sc_cum_bytes);
     h.file_size    = off;
 
     FILE *f = fopen(path, "wb");
@@ -122,9 +147,12 @@ int bcb_prior_save(const char *path) {
     ok &= pad_to(f, h.off_bloom);    if (bloom_bytes) ok &= (fwrite(s.bloom, 1, bloom_bytes, f) == bloom_bytes);
     ok &= pad_to(f, h.off_lm_ctx);   if (lm_ctx_bytes) ok &= (fwrite(s_lm_ctx, 1, lm_ctx_bytes, f) == lm_ctx_bytes);
     ok &= pad_to(f, h.off_lm_cum);   if (lm_cum_bytes) ok &= (fwrite(s_lm_cum, 1, lm_cum_bytes, f) == lm_cum_bytes);
+    ok &= pad_to(f, h.off_schema_modes); if (sc_modes_bytes) ok &= (fwrite(s_sc_modes, 1, sc_modes_bytes, f) == sc_modes_bytes);
+    ok &= pad_to(f, h.off_schema_cum);   if (sc_cum_bytes)   ok &= (fwrite(s_sc_cum, 1, sc_cum_bytes, f) == sc_cum_bytes);
     if (fclose(f) != 0) ok = 0;
 
     s_lm_n = 0; s_lm_k = 0; s_lm_ctx = NULL; s_lm_cum = NULL;   /* 1회성: 등록 해제 */
+    s_sc_rec = 0; s_sc_pos = 0; s_sc_modes = NULL; s_sc_cum = NULL;
     return ok ? 0 : -1;
 }
 
@@ -257,8 +285,13 @@ BcbPrior *bcb_prior_mmap(const char *path) {
     p->lm_ctx = (const unsigned char *)map + h->off_lm_ctx;
     p->lm_cum = (const uint16_t *)((const char *)map + h->off_lm_cum);
     lm_build_index(p);
+    p->schema_rec = (int)h->schema_rec; p->schema_pos = (int)h->schema_pos;
+    p->schema_modes = (const unsigned char *)map + h->off_schema_modes;
+    p->schema_cum   = (const uint16_t *)((const char *)map + h->off_schema_cum);
     return p;
 }
+
+int bcb_prior_record_size(const BcbPrior *p) { return p ? p->schema_rec : 0; }
 
 void bcb_prior_close(BcbPrior *p) {
     if (!p) return;
@@ -291,9 +324,113 @@ static void landmark_dist(uint32_t *cum, uint32_t scale, void *user) {
     bt_v3_distribution(cum, scale);
 }
 
+/* ── structural (position-aware) codec ─────────────────────
+ * btv3 를 쓰지 않는다 — 분포는 자리별 schema cum 으로 결정. 단일 글로벌 상태(단일 스레드). */
+static const BcbPrior *g_sc_p;
+static int g_sc_pos;
+static unsigned char g_sc_prev[SCHEMA_MAX];   /* 직전 레코드 바이트 */
+static unsigned char g_sc_cur[SCHEMA_MAX];    /* 현재 레코드 누적 */
+
+void bcb_prior_msg_begin(void) {
+    g_sc_pos = 0;
+    memset(g_sc_prev, 0, sizeof g_sc_prev);
+    memset(g_sc_cur, 0, sizeof g_sc_cur);
+}
+
+static void structural_dist(uint32_t *cum, uint32_t scale, void *user) {
+    const BcbPrior *p = (const BcbPrior *)user;
+    int pos = g_sc_pos;
+    if (pos >= p->schema_pos) pos = pos % p->schema_pos;   /* 안전 (정렬 가정) */
+    const uint16_t *w = p->schema_cum + (size_t)pos * 256;
+    uint32_t acc = 0;
+    if (p->schema_modes[pos]) {                 /* delta: prev[pos] 만큼 순환 시프트 */
+        int sh = g_sc_prev[pos];
+        for (int b = 0; b < 256; b++) { cum[b] = acc; acc += w[(b - sh) & 0xFF]; }
+    } else {                                    /* byte */
+        for (int b = 0; b < 256; b++) { cum[b] = acc; acc += w[b]; }
+    }
+    cum[256] = acc;
+    if (acc != scale) {                         /* 안전망: 합 불일치 시 균등 */
+        unsigned int u = scale / 256, a2 = 0;
+        for (int b = 0; b < 256; b++) { cum[b] = a2; a2 += (u ? u : 1); }
+        cum[256] = a2;
+    }
+}
+
+static void structural_train(unsigned char b, void *user) {
+    const BcbPrior *p = (const BcbPrior *)user;
+    g_sc_cur[g_sc_pos] = b;                      /* 실제 바이트 저장 (prev 추적) */
+    g_sc_pos++;
+    if (g_sc_pos >= p->schema_rec) {
+        memcpy(g_sc_prev, g_sc_cur, (size_t)p->schema_rec);
+        g_sc_pos = 0;
+    }
+}
+
 CecBT bcb_prior_cec_bt(BcbPrior *p) {
+    if (p && p->schema_rec > 0 && p->schema_pos > 0 && p->schema_rec <= SCHEMA_MAX) {
+        g_sc_p = p;
+        bcb_prior_msg_begin();
+        CecBT bt; bt.distribution = structural_dist; bt.train = structural_train; bt.user = p;
+        return bt;                               /* btv3 미사용 — attach 불필요 */
+    }
     bcb_prior_attach(p);
     CecBT bt = btv3_cec_bt_from_prior();
     if (p && p->lm_k) { bt.distribution = landmark_dist; bt.user = p; }
     return bt;
+}
+
+/* ── schema 빌드: corpus 를 rec 로 정렬, 자리별 byte/delta 분포 + held-out mode ── */
+int bcb_prior_save_with_schema(const char *path, const unsigned char *corpus,
+                               size_t corpus_len, int rec) {
+    if (rec < 1 || rec > SCHEMA_MAX) return -1;
+    size_t nrec = corpus_len / (size_t)rec;
+    if (nrec < 2) return bcb_prior_save(path);   /* 데이터 부족 → schema 없이 */
+
+    /* 자리별 byte/delta 빈도 (held-out: fit 80% / val 20%) */
+    static double bf[SCHEMA_MAX][256], df[SCHEMA_MAX][256];
+    /* SCHEMA_MAX*256*8*2 = 4MB — 정적이라 OK */
+    memset(bf, 0, (size_t)rec * 256 * sizeof(double));
+    memset(df, 0, (size_t)rec * 256 * sizeof(double));
+    size_t nfit = nrec >= 5 ? (nrec * 4) / 5 : nrec;
+
+    for (size_t r = 0; r < nfit; r++)
+        for (int pp = 0; pp < rec; pp++) {
+            unsigned char b = corpus[r*rec + pp];
+            bf[pp][b] += 1.0;
+            if (r > 0) df[pp][(unsigned char)(b - corpus[(r-1)*rec + pp])] += 1.0;
+        }
+
+    unsigned char *modes = (unsigned char *)calloc((size_t)rec, 1);
+    uint16_t *cum = (uint16_t *)malloc((size_t)rec * 256 * sizeof(uint16_t));
+    for (int pp = 0; pp < rec; pp++) {
+        double totb = 0, totd = 0;
+        for (int b = 0; b < 256; b++) { totb += bf[pp][b]; totd += df[pp][b]; }
+        /* held-out mode 결정 */
+        double vb = 0, vd = 0; size_t vstart = (nfit < nrec) ? nfit : 1, vn = 0;
+        for (size_t r = vstart; r < nrec; r++) {
+            unsigned char b = corpus[r*rec + pp];
+            vb += -log2((bf[pp][b] + LM_BACKOFF_W/256) / (totb + LM_BACKOFF_W));
+            unsigned char d = (unsigned char)(b - corpus[(r-1)*rec + pp]);
+            vd += -log2((df[pp][d] + LM_BACKOFF_W/256) / (totd + LM_BACKOFF_W));
+            vn++;
+        }
+        int use_delta = (vn > 0 && vd < vb);
+        modes[pp] = (unsigned char)use_delta;
+        /* val 구간을 분포에 합산 (전체 train 으로 최종 분포) */
+        for (size_t r = nfit; r < nrec; r++) {
+            unsigned char b = corpus[r*rec + pp];
+            bf[pp][b] += 1.0;
+            if (r > 0) df[pp][(unsigned char)(b - corpus[(r-1)*rec + pp])] += 1.0;
+        }
+        double *src = use_delta ? df[pp] : bf[pp];
+        double sum = 0; for (int b = 0; b < 256; b++) sum += src[b];
+        double P[256]; for (int b = 0; b < 256; b++) P[b] = src[b];
+        lm_quantize(P, sum, cum + (size_t)pp * 256, CEC_RC_SCALE);
+    }
+
+    bcb_prior_set_schema_(rec, rec, modes, cum);
+    int rc = bcb_prior_save(path);
+    free(modes); free(cum);
+    return rc;
 }
