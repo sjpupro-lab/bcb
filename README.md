@@ -23,38 +23,43 @@ brotli+dict by **22–80% at 64B**; for data larger than ~2KB, use brotli or zst
 
 ## BCB 가 이기는 곳 / When BCB wins
 
-`make msgbench` 실측 (train-size 50,000, samples 24, 코어 코덱 출력 바이트, BCB round-trip 무손실).
-ratio = 원본/압축, 클수록 좋음. 자세히는 `docs/benchmarks.md`.
+`make msgbench-landmark` 실측 (train 50,000, samples 24, 코어 코덱 출력 바이트, round-trip 무손실).
+ratio = 원본/압축, 클수록 좋음. **BCB** = 적응형 공유 prior(메시지별), **BCB+lm** = frozen 공유 prior
++ landmark index. 자세히는 `docs/benchmarks.md`, `docs/landmark.md`.
 
-| 시나리오 | 크기 | **BCB** | brotli+dict | zstd+dict | BCB 우위 |
-|---|---|---|---|---|---|
-| MQTT     | 64B  | **4.03×** | 2.24× | 2.10× | **+80%** |
-| RPC      | 64B  | **3.49×** | 1.91× | 2.08× | **+68%** |
-| syslog   | 64B  | **3.18×** | 1.95× | 1.72× | **+63%** |
-| IoT 패킷 | 64B  | **1.54×** | 0.95× | 0.98× | **+57%** |
-| HTTP 헤더 | 64B  | **5.19×** | 4.25× | 2.97× | **+22%** |
-| MQTT     | 256B | **4.31×** | 3.62× | 3.36× | **+19%** |
-| MQTT     | 512B | **4.39×** | 4.31× | 4.11× | **+2%**  |
+| 시나리오 | 크기 | BCB | **BCB+lm** | brotli+dict | zstd+dict | winner |
+|---|---|---|---|---|---|---|
+| MQTT     | 64B   | 4.03× | **4.60×** | 2.24× | 2.10× | BCB+lm |
+| RPC      | 64B   | 3.49× | **4.00×** | 1.91× | 2.08× | BCB+lm |
+| syslog   | 64B   | 3.18× | **3.44×** | 1.95× | 1.72× | BCB+lm |
+| HTTP 헤더 | 256B  | 5.96× | **8.52×** | 7.98× | 6.98× | BCB+lm |
+| MQTT     | 1024B | 4.42× | **5.16×** | 4.93× | 4.80× | BCB+lm |
+| RPC      | 1024B | 3.84× | **4.52×** | 4.23× | 4.34× | BCB+lm |
+| IoT 패킷 | 64B   | **1.54×** | 1.54× | 0.95× | 0.98× | BCB |
 
-- **64B 에서 5개 시나리오 전부 BCB 1등.** 256B 까지는 4/5 에서 우위(HTTP 만 예외), MQTT 는 512B 까지.
-- IoT 64B 에서 brotli·zstd 는 프레임 overhead 로 **데이터를 키운다(<1.0×)** — BCB 는 1.54× 유지.
+- **landmark 가 BCB 의 승리 구간을 넓힌다**: brotli/zstd 를 넘는 상한이 HTTP ~256B, MQTT/RPC ~1KB,
+  syslog ~512B (base 만일 땐 각각 ~64B/~512B/~256B). HTTP 256B 에서 BCB+lm **8.52×** vs brotli 7.98×.
+- IoT(고엔트로피 binary)는 landmark 미적중 → BCB+lm 이득 0, 적응형 base 가 더 낫다(아래 참고). 64B 에서
+  brotli·zstd 는 프레임 overhead 로 **데이터를 키운다(<1.0×)**.
 - **메시지가 작을수록 BCB 우위가 커진다.**
 
 ## BCB 가 지는 곳 / When BCB loses (정직하게)
 
-| 시나리오 | 크기 | BCB | brotli+dict | zstd+dict | winner |
-|---|---|---|---|---|---|
-| HTTP 헤더 | 128B  | 5.95× | **6.95×** | 5.18× | brotli |
-| syslog   | 1024B | 3.41× | **3.90×** | 3.78× | brotli |
-| MQTT     | 4096B | 4.46× | **5.78×** | 5.64× | brotli |
-| IoT 패킷 | 4096B | 1.47× | **2.04×** | 1.72× | brotli |
-| HTTP 헤더 | 4096B | 5.99× | **14.56×** | 13.93× | brotli |
+| 시나리오 | 크기 | BCB | BCB+lm | brotli+dict | zstd+dict | winner |
+|---|---|---|---|---|---|---|
+| HTTP 헤더 | 512B  | 6.07× | 8.89× | **9.37×** | 8.90× | brotli |
+| MQTT     | 4096B | 4.46× | 5.20× | **5.78×** | 5.64× | brotli |
+| syslog   | 1024B | 3.41× | 3.74× | **3.90×** | 3.78× | brotli |
+| IoT 패킷 | 4096B | **1.47×** | 1.33× | **2.04×** | 1.72× | brotli |
+| HTTP 헤더 | 4096B | 5.99× | 8.60× | **14.56×** | 13.93× | brotli |
 
-교차점은 대략 **512B~1KB**. 그 이상에서는 LZ77 long-range matching(brotli/zstd)이 이긴다.
-HTTP 텍스트 헤더는 LZ 친화적이라 128B 부터 brotli 가 앞선다. **큰 데이터엔 brotli/zstd 를 쓰라.**
+교차점은 landmark 로 올라가지만, 그 이상(대략 HTTP 512B / MQTT·RPC 2KB)에서는 LZ77 long-range
+matching(brotli/zstd)이 이긴다. **큰 데이터엔 brotli/zstd 를 쓰라.**
 
-> 원 기획서의 "검증된" 수치(예: HTTP 64B 10.67×)와 본 레포 실측의 차이·원인은
-> `docs/benchmarks.md`의 "원 보고 수치와의 차이"에 병기했다 (방향은 일치, 절대 배수는 코퍼스 의존).
+> **BCB+lm 주의(정직)**: BCB+lm 은 frozen(stateless) 모드라, landmark 가 거의 안 맞는 데이터(IoT)에선
+> 적응형 base 보다 약간 낮을 수 있다(예 IoT 4096B 1.33× < base 1.47×). landmark 이득은 반복적
+> 텍스트형(HTTP/MQTT/log/RPC)에 집중된다. 원 기획서 수치(예 MQTT 64B +50~98%)는 재현되지 않으며
+> 실측은 +8~42%(HTTP 최대) 다 — `docs/landmark.md` 에 병기.
 
 ## 타겟 사용처 / Target use cases
 

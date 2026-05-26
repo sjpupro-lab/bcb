@@ -128,6 +128,80 @@ int bcb_prior_save(const char *path) {
     return ok ? 0 : -1;
 }
 
+/* ── landmark 추출 (학습된 btv3 에서) ───────────────────────── */
+#define LM_BACKOFF_W 64.0    /* 경험적 분포 backoff pseudo-count */
+typedef struct { unsigned long idx; unsigned total; } CtxRef;
+static int cmp_ctxref(const void *a, const void *b) {
+    unsigned ta = ((const CtxRef *)a)->total, tb = ((const CtxRef *)b)->total;
+    return ta < tb ? 1 : (ta > tb ? -1 : 0);
+}
+/* P[256](합 sum) 를 width[256] 정수로 양자화. 합=scale, 각 width>=1 보장. */
+static void lm_quantize(const double *P, double sum, uint16_t *w, int scale) {
+    int acc = 0;
+    for (int b = 0; b < 256; b++) {
+        double x = sum > 0 ? P[b] / sum * scale : (double)scale / 256.0;
+        int v = (int)(x + 0.5);
+        if (v < 1) v = 1;
+        if (v > scale) v = scale;
+        w[b] = (uint16_t)v; acc += v;
+    }
+    int diff = scale - acc;
+    while (diff > 0) {
+        int bi = 0; double best = -1;
+        for (int b = 0; b < 256; b++) { double pr = sum > 0 ? P[b] / sum : 1.0 / 256; if (pr > best) { best = pr; bi = b; } }
+        w[bi]++; diff--;
+    }
+    while (diff < 0) {
+        int bi = -1, mx = 1;
+        for (int b = 0; b < 256; b++) if (w[b] > mx) { mx = w[b]; bi = b; }
+        if (bi < 0) break;
+        w[bi]--; diff++;
+    }
+}
+
+int bcb_prior_save_with_landmarks(const char *path, int n, unsigned k) {
+    if (n < 1 || n > 24 || k == 0) return bcb_prior_save(path);
+
+    const unsigned char *win; int wl = bt_v3_window(&win);
+    unsigned char saved[32]; int saved_len = wl > 32 ? 32 : wl;
+    memcpy(saved, win, (size_t)saved_len);
+
+    unsigned long npool = bt_v3_ctx_pool_count();
+    CtxRef *refs = (CtxRef *)malloc(sizeof(CtxRef) * (npool ? npool : 1));
+    unsigned long nlen = 0;
+    unsigned char ctx[32]; int len; unsigned total;
+    for (unsigned long i = 0; i < npool; i++) {
+        if (bt_v3_ctx_at(i, ctx, &len, &total, NULL) != 0) continue;
+        if (len == n && total > 0) { refs[nlen].idx = i; refs[nlen].total = total; nlen++; }
+    }
+    qsort(refs, nlen, sizeof(CtxRef), cmp_ctxref);
+    if (k > nlen) k = (unsigned)nlen;
+
+    unsigned char *lm_ctx = (unsigned char *)malloc((size_t)k * n + 1);
+    uint16_t *lm_cum = (uint16_t *)malloc((size_t)k * 256 * sizeof(uint16_t) + 1);
+    unsigned freq[256]; uint32_t cum[257];
+    for (unsigned r = 0; r < k; r++) {
+        bt_v3_ctx_at(refs[r].idx, ctx, &len, &total, freq);
+        memcpy(lm_ctx + (size_t)r * n, ctx, (size_t)n);
+        bt_v3_set_window(ctx, n);
+        bt_v3_distribution(cum, CEC_RC_SCALE);
+        double P[256], sum = 0, tot = (double)total + LM_BACKOFF_W;
+        for (int b = 0; b < 256; b++) {
+            double pbt = (double)(cum[b + 1] - cum[b]) / (double)CEC_RC_SCALE;
+            P[b] = (double)freq[b] / tot + LM_BACKOFF_W * pbt / tot;
+            sum += P[b];
+        }
+        lm_quantize(P, sum, lm_cum + (size_t)r * 256, CEC_RC_SCALE);
+    }
+    free(refs);
+    bt_v3_set_window(saved, saved_len);          /* 학습 종료 window 복원 */
+
+    bcb_prior_set_landmarks(n, k, lm_ctx, lm_cum);
+    int rc = bcb_prior_save(path);
+    free(lm_ctx); free(lm_cum);
+    return rc;
+}
+
 static void lm_build_index(BcbPrior *p) {
     if (!p->lm_k) { p->lm_slot = NULL; p->lm_nslots = 0; p->lm_mask = 0; return; }
     unsigned long ns = 1; while (ns < (unsigned long)p->lm_k * 2) ns <<= 1;

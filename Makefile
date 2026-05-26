@@ -39,7 +39,7 @@ MSG_SIZES ?= 64,128,256,512,1024,2048,4096
 MSG_BYTES ?= 400000
 MSG_SAMPLES ?= 24
 
-.PHONY: all test bench clean msgbench msgbench-md msgbench-check prior prior-equiv prior-rss hpack hpack-docs landmark landmark-verify landmark-bench landmark-bench-docs
+.PHONY: all test bench clean msgbench msgbench-md msgbench-landmark msgbench-check prior prior-equiv prior-rss hpack hpack-docs landmark landmark-verify landmark-bench landmark-bench-docs
 
 all: $(BUILD)/bcb-cli $(BUILD)/bcb-bench
 
@@ -198,8 +198,8 @@ landmark-bench-docs: $(BUILD)/bcb-prior-build $(BUILD)/bcb-blockbench $(addprefi
 	  --write-docs docs/landmark.md
 
 # ── 작은 메시지 벤치마크 ─────────────────────────────────
-$(BUILD)/bcb-msgbench: tools/bcb-msgbench.c $(V0_SRC) $(V3_SRC) | $(BUILD)
-	$(CC) $(CFLAGS) $(V0_INC) $(V3_INC) -o $@ $^ $(LDLIBS) $(MSGBENCH_LIBS)
+$(BUILD)/bcb-msgbench: tools/bcb-msgbench.c $(V0_SRC) $(V3_SRC) $(V5_SRC) | $(BUILD)
+	$(CC) $(CFLAGS) $(V0_INC) $(V3_INC) $(V5_INC) -o $@ $^ $(LDLIBS) $(MSGBENCH_LIBS)
 
 # 시나리오별 합성 코퍼스 생성 (결정적, --seed 고정)
 $(BUILD)/corpus_%.bin: $(SCN)/%.py | $(BUILD)
@@ -220,6 +220,18 @@ msgbench-md: $(BUILD)/bcb-msgbench $(addprefix $(BUILD)/corpus_,$(addsuffix .bin
 	  ./$(BUILD)/bcb-msgbench --corpus $(BUILD)/corpus_$$s.bin \
 	    --train-size $(MSG_TRAIN) --message-sizes $(MSG_SIZES) --samples $(MSG_SAMPLES) \
 	    --md --label $$s; \
+	  echo ""; \
+	done
+
+# BCB vs BCB+landmark vs brotli vs zstd (landmark 열 포함)
+MSG_LM_K ?= 512
+MSG_LM_N ?= 8
+msgbench-landmark: $(BUILD)/bcb-msgbench $(addprefix $(BUILD)/corpus_,$(addsuffix .bin,$(SCENARIOS)))
+	@for s in $(SCENARIOS); do \
+	  echo "=== $$s ==="; \
+	  ./$(BUILD)/bcb-msgbench --corpus $(BUILD)/corpus_$$s.bin \
+	    --train-size $(MSG_TRAIN) --message-sizes $(MSG_SIZES) --samples $(MSG_SAMPLES) \
+	    --landmark-k $(MSG_LM_K) --landmark-n $(MSG_LM_N); \
 	  echo ""; \
 	done
 

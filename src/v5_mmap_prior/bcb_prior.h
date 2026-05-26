@@ -32,6 +32,10 @@ void bcb_prior_set_landmarks(int n, unsigned k, const unsigned char *ctx, const 
 /* 현재 학습된 btv3 globals 를 path 로 직렬화. 0 ok / -1 실패. */
 int bcb_prior_save(const char *path);
 
+/* save + 현재 학습된 BT 에서 길이 n 빈출 context top-k 를 뽑아 landmark 로 박는다.
+ * (window 는 내부에서 보존·복원). 0 ok / -1 실패. */
+int bcb_prior_save_with_landmarks(const char *path, int n, unsigned k);
+
 /* prior 파일을 mmap 으로 로드 (RAM 에 거의 복사 안 함). 실패 시 NULL. */
 BcbPrior *bcb_prior_mmap(const char *path);
 

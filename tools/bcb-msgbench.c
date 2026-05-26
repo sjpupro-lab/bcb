@@ -25,6 +25,7 @@
 #define _POSIX_C_SOURCE 200809L   /* strdup (POSIX, not C99) */
 #include "ce_compress.h"
 #include "btv3.h"
+#include "bcb_prior.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -64,6 +65,22 @@ static size_t bcb_compress(const uint8_t *train, size_t train_len,
     *lossless = (dec && memcmp(dec, msg, msg_len) == 0);
     free(dec);
     free(comp);
+    return clen;
+}
+
+/* ── BCB + landmark prior (frozen, stateless per message) ── */
+static size_t bcb_landmark_compress(BcbPrior *lmp, const uint8_t *msg, size_t msg_len, int *lossless) {
+    CecBT bt = bcb_prior_cec_bt(lmp);
+    bt_v3_reset_window();
+    CecEncoder *e = cec_enc_new(&bt);
+    for (size_t i = 0; i < msg_len; i++) cec_enc_byte(e, msg[i]);
+    size_t clen = 0;
+    uint8_t *comp = cec_enc_finish(e, &clen);
+    cec_enc_free(e);
+    bcb_prior_attach(lmp); bt_v3_reset_window();
+    uint8_t *dec = cec_decompress(comp, clen, msg_len, &bt);
+    *lossless = (dec && memcmp(dec, msg, msg_len) == 0);
+    free(dec); free(comp);
     return clen;
 }
 
@@ -113,6 +130,7 @@ int main(int argc, char **argv) {
     size_t train_size = 50000;
     int max_samples = 64;
     int md = 0;
+    int lm_k = 0, lm_n = 8;            /* landmark: k>0 이면 BCB+lm 열 추가 */
     const char *sizes_arg = "64,128,256,512,1024,2048,4096";
 
     for (int i = 1; i < argc; i++) {
@@ -121,6 +139,8 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--message-sizes") && i + 1 < argc) sizes_arg = argv[++i];
         else if (!strcmp(argv[i], "--samples") && i + 1 < argc) max_samples = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--label") && i + 1 < argc) label = argv[++i];
+        else if (!strcmp(argv[i], "--landmark-k") && i + 1 < argc) lm_k = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--landmark-n") && i + 1 < argc) lm_n = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--md")) md = 1;
     }
     if (!corpus_path) {
@@ -155,16 +175,38 @@ int main(int argc, char **argv) {
     ZSTD_CCtx_setParameter(zc, ZSTD_c_dictIDFlag, 0);
     ZSTD_CCtx_loadDictionary(zc, train, train_size);  /* raw content dict, sticky */
 
+    /* landmark prior (선택): train 구간으로 한 번 빌드 → mmap 후 frozen 사용 */
+    BcbPrior *lmp = NULL;
+    const char *lm_path = "/tmp/bcb_msgbench.bcb-prior";
+    if (lm_k > 0) {
+        CecBT lb = btv3_cec_bt();
+        for (size_t i = 0; i < train_size; i++) lb.train(train[i], lb.user);
+        if (bcb_prior_save_with_landmarks(lm_path, lm_n, (unsigned)lm_k) == 0) {
+            bt_v3_free();
+            lmp = bcb_prior_mmap(lm_path);
+        }
+        if (!lmp) fprintf(stderr, "warning: landmark prior unavailable; skipping BCB+lm\n");
+    }
+
     if (md) {
         if (label) printf("### %s\n\n", label);
-        printf("| msg_size | BCB(B) | BCB(x) | brotli(B) | brotli(x) | zstd(B) | zstd(x) | winner |\n");
-        printf("|---|---|---|---|---|---|---|---|\n");
+        if (lmp) {
+            printf("| msg_size | BCB(x) | BCB+lm(x) | brotli(x) | zstd(x) | winner |\n");
+            printf("|---|---|---|---|---|---|\n");
+        } else {
+            printf("| msg_size | BCB(B) | BCB(x) | brotli(B) | brotli(x) | zstd(B) | zstd(x) | winner |\n");
+            printf("|---|---|---|---|---|---|---|---|\n");
+        }
     } else {
-        printf("corpus: %s (%zu B), train-size: %zu, samples<=%d\n",
-               corpus_path, corpus_len, train_size, max_samples);
-        printf("%-9s %8s %8s %10s %10s %8s %8s  %s\n",
-               "msg_size", "BCB(B)", "BCB(x)", "brotli(B)", "brotli(x)",
-               "zstd(B)", "zstd(x)", "winner");
+        printf("corpus: %s (%zu B), train-size: %zu, samples<=%d%s\n",
+               corpus_path, corpus_len, train_size, max_samples, lmp ? ", +landmark" : "");
+        if (lmp)
+            printf("%-9s %8s %10s %10s %8s  %s\n",
+                   "msg_size", "BCB(x)", "BCB+lm(x)", "brotli(x)", "zstd(x)", "winner");
+        else
+            printf("%-9s %8s %8s %10s %10s %8s %8s  %s\n",
+                   "msg_size", "BCB(B)", "BCB(x)", "brotli(B)", "brotli(x)",
+                   "zstd(B)", "zstd(x)", "winner");
     }
 
     int all_lossless = 1;
@@ -185,11 +227,31 @@ int main(int argc, char **argv) {
             zs_t += (double)zstd_compress(zc, msg, ms);
             orig_t += (double)ms;
         }
+        /* landmark 측정은 별도 sub-loop (btv3 global 충돌 회피: base pool 해제 후 attach) */
+        double lm_t = 0;
+        if (lmp) {
+            bt_v3_free();
+            for (int k = 0; k < n; k++) {
+                int ll = 0;
+                lm_t += (double)bcb_landmark_compress(lmp, test + (size_t)k * ms, ms, &ll);
+                if (!ll) all_lossless = 0;
+            }
+        }
         double bcb_avg = bcb_t / n, br_avg = br_t / n, zs_avg = zs_t / n;
         double bcb_x = orig_t / bcb_t, br_x = orig_t / br_t, zs_x = orig_t / zs_t;
-        const char *winner = (bcb_x >= br_x && bcb_x >= zs_x) ? "BCB"
-                           : (br_x >= zs_x ? "brotli" : "zstd");
-        if (md) {
+        double lm_x = lm_t > 0 ? orig_t / lm_t : 0;
+        double best_bcb = (lmp && lm_x > bcb_x) ? lm_x : bcb_x;
+        const char *winner = (best_bcb >= br_x && best_bcb >= zs_x)
+                                 ? (lmp && lm_x >= bcb_x ? "BCB+lm" : "BCB")
+                                 : (br_x >= zs_x ? "brotli" : "zstd");
+        if (lmp) {
+            if (md)
+                printf("| %zu | %.2f | %.2f | %.2f | %.2f | %s |\n",
+                       ms, bcb_x, lm_x, br_x, zs_x, winner);
+            else
+                printf("%-9zu %8.2f %10.2f %10.2f %8.2f  %s\n",
+                       ms, bcb_x, lm_x, br_x, zs_x, winner);
+        } else if (md) {
             printf("| %zu | %.0f | %.2f | %.0f | %.2f | %.0f | %.2f | %s |\n",
                    ms, bcb_avg, bcb_x, br_avg, br_x, zs_avg, zs_x, winner);
         } else {
@@ -200,6 +262,7 @@ int main(int argc, char **argv) {
 
     if (!md)
         printf("\nlossless (BCB round-trip, all messages): %s\n", all_lossless ? "yes" : "NO");
+    if (lmp) bcb_prior_close(lmp);
 
     BrotliEncoderDestroyPreparedDictionary(bdict);
     ZSTD_freeCCtx(zc);
