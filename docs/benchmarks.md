@@ -144,10 +144,31 @@ blend: `P_final(b) = α·P_BT(b) + (1−α)·P(type|prev_type)·P(b|type)`, symd
 - **whitespace_phase**: `P(b | phase)`, phase = 직전 공백 이후 비공백 길이(0..12 clamp).
 - combo: 각 채널 `adjust` 를 순차 체이닝 (per-channel α blend).
 
+## v3 단계 1 — distribution caching (`make v3-compare`)
+
+`src/v3_integer_bt/btv3.c`: 활성 context 를 1회만 탐색하고 각 context 의 관측 next-byte 를
+직접 순회(per-context 링크)하여 분포를 한 번에 계산. predict_byte 256회 호출 + 중복
+context 탐색·exp/pow 제거. `pow(x,20)` 은 정수승(5회 곱)으로 대체.
+
+v0 vs v3 (50KB 학습 / 4KB 발췌, 4권):
+
+| 책 | v0(B) | v3(B) | ratioΔ | cum_relΔ | v0 인코드 | v3 인코드 | speedup | lossless |
+|----|-------|-------|--------|----------|-----------|-----------|---------|----------|
+| pride | 1522 | 1522 | +0.00% | 0.0000% | 4.09s | 0.11s | 36.2× | yes |
+| frankenstein | 1542 | 1542 | +0.00% | 0.0000% | 4.55s | 0.12s | 36.6× | yes |
+| alice | 1435 | 1435 | +0.00% | 0.0000% | 4.54s | 0.11s | 43.4× | yes |
+| moby_dick | 1638 | 1638 | +0.00% | 0.0000% | 4.35s | 0.12s | 36.1× | yes |
+| 합계 | 6137 | 6137 | +0.00% | – | 17.52s | 0.46s | **37.9×** | yes |
+
+**v3 출력이 v0 와 비트단위 동일**(ratioΔ 0.00%, cum 폭 상대오차 0.0000%), 4권 전부 무손실,
+인코드 평균 **37.9× 가속**. 정수승·재결합의 미세 오차가 alpha-blend·scale 양자화에 흡수돼
+양자화된 cum 이 v0 와 완전히 일치했다.
+
 ### 결정 요약
 
 - **v2 (시계계층)**: 폐기.
-- **v3 (정수 BT)**: 진행 + 자료구조 최적화(open addressing, bloom 16M, distribution caching) 확장.
+- **v3 (정수 BT)**: 단계별 진행. **단계 1 (distribution caching) 완료** — v0 비트동일, 37.9× 가속.
+  다음: (2) open addressing + bloom 16M, (3) 정수 LUT, (4) aux 정수화 + MCU 빌드.
 - **v4 (보조채널)**: distribution blend 방식 `AuxChannel` 라이브러리. 4채널 **측정 완료** —
   단독 +0.6~0.8%, combo **+2.60%** (무손실). 다음: v3 정수화와 결합.
 
