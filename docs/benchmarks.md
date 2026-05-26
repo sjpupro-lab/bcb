@@ -54,9 +54,63 @@ BCB 는 50 KB 학습만으로 이미 bzip2-9 를 넘어서고, 500 KB 학습에�
 즉 (b)(c) 자체로는 압축 이득이 없다.
 
 실질 이득은 BT 가 **단계(깊이)별로 서로 다른 통계를 학습**할 때(multi-resolution)만 생긴다.
-이는 사실상 v2(시계계층 다중좌표 context)의 "계층/위치/방향/각도" 학습과 같은 아이디어다.
-따라서 (b)(c) 의 multi-resolution 학습은 v1 에 중복 구현하기보다 **v2 로 통합**하는 것을 제안한다.
-v1 은 (a) 만 채택하여 마무리. (호시 확인 요청 — 아래 PR 참고)
+v2(시계계층 다중좌표 context)로 이를 시도했으나 측정 결과 bucket fragmentation 으로 모두
+악화되어 폐기됐다 (아래 "v2/v3/v4 탐색" 참고). 거시 통계는 context mix 가 아니라
+v4 의 distribution blend 로 다룬다. v1 은 (a) 만 채택하여 마무리.
+
+## v2/v3/v4 탐색 (2026-05-26, 4KB 발췌 / 50KB 학습 baseline)
+
+여러 방향을 측정해 채택/폐기를 결정한 기록.
+
+| 방향 | 결과 | 결정 |
+|------|------|------|
+| v2 시계계층 carry tick | baseline 대비 −1.5 ~ −180% | **폐기** |
+| 학습 코퍼스 확장 (B) | 200KB 까지 +9.5%, 500KB+ 시간 폭발 | v3 자료구조 개선 후 재시도 |
+| 보조채널: fnv-XOR mix (C) | 전부 악화 (−2 ~ −130%) | 메커니즘 거부 |
+| 보조채널: distribution blend (C) | **+0.41% 일관 (4권 중 3권)** | **v4 의 진짜 형태** |
+
+### v2 carry tick — 폐기
+
+| 구성 | 압축비 | baseline 대비 |
+|------|--------|---------------|
+| baseline | 2.80× | – |
+| B=[256,16,16,16] (pseudo-byte) | 2.76× | −1.5% |
+| B=[16,16,16,16] | 2.36× | −18.6% |
+| B=[256,16,16,16] (fnv-XOR mix) | 1.00× | −179.9% |
+
+원인: carry tuple 에 따라 같은 24-byte context 가 다른 bucket 으로 흩어짐 → 학습 fragmentation.
+
+### B 학습 코퍼스 확장 — 부분 효과 후 시간 폭발
+
+| 학습량 | 압축비 | 학습 | 인코드 |
+|--------|--------|------|--------|
+| 50 KB | 2.42× | 0.4s | 2.9s |
+| 200 KB | 2.65× | 5.1s | 13.4s |
+| 500 KB | (60s timeout) | – | – |
+
+원인: bloom 포화 + pool chain lookup O(n²). → v3 자료구조 최적화와 결합 필요.
+
+### C distribution blend — 양수 발견 (v4 의 방향)
+
+context 를 안 건드리고 byte type prior 를 별도 학습해 α=0.985 로 blend:
+
+| 책 | baseline (B) | +aux (B) | 개선 |
+|----|------|------|------|
+| pride | 1464 | 1458 | +0.41% |
+| frankenstein | 1586 | 1577 | +0.57% |
+| alice | 690 | 691 | −0.14% |
+| moby_dick | 1632 | 1624 | +0.49% |
+| 합계 | 5372 | 5350 | **+0.41%** |
+
+4권 중 3권 일관 개선 → 노이즈가 아닌 신호. type-prior 가 BT 미학습 거시 전이(알파벳→공백 등)를 보정.
+
+### 결정 요약
+
+- **v2 (시계계층)**: 폐기.
+- **v3 (정수 BT)**: 진행 + 자료구조 최적화(open addressing, bloom 16M, distribution caching) 확장.
+- **v4 (보조채널)**: distribution blend 방식 `AuxChannel` 라이브러리로 재정의.
+  내장 채널 — byte_type(측정완료) / bigram_type / case_pattern / whitespace_phase.
+  기대: 4채널 결합 +1.5~3%.
 
 ### 원 레퍼런스 (다른 발췌)
 

@@ -33,17 +33,36 @@ BT 가 내는 256-byte 분포는 Σ P(b) = 1 인 제약을 가진다.
 | 절반이 어딘지 자동 | 분포 mode 기준 좌/우 분할이 context 로 결정적 |
 | 정해진 공간 재귀 | 256 → 128 → 64 → … 이진분할, 양쪽 동일 순서 |
 
-(a) 합=1 강제는 정수 라운딩 오차 누적을 막아 round-trip 안정성을 높인다.
-(b)(c) 대칭/계층 분할은 BT 가 깊이별(multi-resolution) 분포를 학습할 여지를 준다.
-실제 이득은 v1 에서 ablation 으로 측정한다 — v0 보다 나쁘면 폐기한다.
+(a) 합=1 강제는 정확히 scale 로 재양자화하여 꼬리 빈의 확률 낭비를 줄인다.
+측정 결과 전 학습량에서 +0.3% 일관 이득 + 무손실 → **채택** (`docs/benchmarks.md`).
+(b)(c) 대칭/계층 분할은 동일 분포 재부호화라 자체 이득이 없음(사슬규칙) → 단독 구현 보류.
 
-## 4. 시계계층 좌표 — v2 작업 항목의 근거
+## 4. 시계계층 좌표 (v2) — 측정 후 폐기
 
-v0 는 1D byte-stream context 만 쓴다. v2 는 (계층 / 위치 / 방향 / 각도) 다중 좌표를
-BT context 로 확장한다. context 가 더 sparse 해지지만 더 정확해질 수 있다.
-이것이 호시 비전의 핵심이며, 측정으로 검증한다.
+v2 는 (계층/위치/방향/각도) carry tick 좌표를 BT hash 에 mix 하려 했다.
+측정 결과 baseline 대비 −1.5 ~ −180% 로 모두 악화. 원인은 **bucket fragmentation**:
+같은 24-byte context 가 carry tuple 에 따라 다른 bucket 으로 흩어져 학습이 조각난다.
+50KB 학습으로는 carry 좌표공간을 cover 하기에 턱없이 부족했다.
 
-## 5. 정수 전용 — v3 작업 항목의 근거
+→ **v2 작업 항목 폐기.** 거시 통계는 context mix 가 아니라 v4 의 distribution blend 로
+다룬다 (아래 §6). 자세한 수치는 `docs/benchmarks.md` 참고.
+
+## 5. 정수 전용 + 자료구조 최적화 (v3)
 
 현재 `predict_byte` 는 `exp`, `pow` 등 double 연산을 쓴다. v3 는 이를 정수 LUT 로
 대체하여 MCU(ESP32/RP2040)에서도 동작하게 한다. range coder 는 이미 32-bit 정수만 쓴다.
+추가로 §2(대규모 학습)에서 드러난 O(n²) 병목을 풀기 위해 다음을 포함한다:
+chain → open addressing, bloom 4M→16M bit 확장, distribution caching(byte당 256 lookup 제거).
+
+## 6. 보조채널 — distribution blend (v4)
+
+context 를 건드리지 않고, 별도로 학습한 **거시 통계 prior** 를 BT 분포와 가중 blend 한다:
+
+```
+prior(b)   = P(type(b) | prev_type) × P(b | type(b))
+P_final(b) = α · P_BT(b) + (1−α) · prior(b)
+```
+
+byte_type 채널, α=0.985 에서 4권 중 3권 +0.4~0.6% 개선(합계 +0.41%, 무손실). context
+fragmentation 없이 BT 가 못 잡는 거시 전이(예: 알파벳→공백)를 보정하는 것이 핵심.
+v4 는 이 blend 방식의 `AuxChannel` 라이브러리로 구현한다.

@@ -82,10 +82,9 @@ build/bcb-cli decode out.bcb  restored.txt -t tests/corpus/pride_and_prejudice.t
 
 ```
 src/v0_baseline/      range coder + 24-byte context n-gram BT (현재 baseline)
-src/v1_symmetric_dist/  대칭쌍 분포 활용 (작업 예정)
-src/v2_hier_clock/      시계계층 좌표공간 (작업 예정)
-src/v3_integer_bt/      정수 전용 BT, MCU 대응 (작업 예정)
-src/v4_aux_channel/     SLIG/wave 보조채널 (작업 예정)
+src/v1_symmetric_dist/  합=1 강제 (단계 a 채택, +0.3%)
+src/v3_integer_bt/      정수 전용 BT + 자료구조 최적화, MCU 대응 (작업 예정)
+src/v4_aux_channel/     보조채널 — distribution blend 방식 (작업 예정)
 tests/                  round-trip + 벤치마크, corpus/ 에 Gutenberg 4권
 tools/                  bcb-cli, bcb-bench
 docs/                   theory.md, benchmarks.md, mcu.md
@@ -97,7 +96,7 @@ bindings/python/        ctypes wrapper (작업 예정)
 ## 정직한 한계 / Honest limits
 
 - 랜덤 데이터는 압축 불가 (Shannon). BCB 도 못 한다. 정상.
-- 현재 v0 측정값 ≈ BPB 2.0 (약 4× 압축). v2 시계계층 좌표, v4 보조채널 등 후속 작업에서 추가 개선 측정 예정.
+- 현재 v0 측정값 ≈ BPB 2.0 (약 4× 압축). v4 보조채널, 대규모 학습 등 후속 작업에서 추가 개선 측정 예정.
 - 인코드 속도 ≈ 2 KB/s (바이트당 256 lookup). v3 에서 캐싱으로 가속 예정.
 - full BT pool ≈ 256MB+. MCU 빌드는 v3 에서 별도 구성.
 
