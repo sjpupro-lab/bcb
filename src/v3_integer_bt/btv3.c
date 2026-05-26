@@ -5,54 +5,79 @@
 /* btv3.c — v3 BT
  *
  * 단계 1: distribution caching (활성 context 1회 탐색 + per-context next-byte 순회).
- * 단계 2: open addressing + bloom 4M→16M.
- *   v0 의 chained hash (8M entries / 256K buckets → 평균 체인 32) 가 대규모 학습 시
- *   삽입마다 긴 체인을 훑어 O(n²) 에 가까워졌다. 슬롯 16M(BtEntry)/8M(CtxEntry) 의
- *   선형 탐사 open addressing 으로 load factor ≤0.5, 탐사 O(1) 화.
- *   같은 entry/freq 를 찾으므로 분포 출력은 v0 와 비트 동일.
+ * 단계 2: open addressing + bloom 4M→16M (대규모 학습 O(n²)→O(1)).
+ * 단계 3: 정수 전용 hot path (log-domain + max-normalization).
+ *   w = exp(n)·conf²⁰ 는 conf²⁰ 가 uint64 를 넘는 극단 동적범위 → 직접 계산 불가.
+ *   대신 log2 영역에서:  log2_w = EXP_LOG2[n] + CONF_LOG2[p]   (둘 다 Q16 정수 LUT)
+ *   레벨별 max_log2 로 정규화:  w_int = EXP2(log2_w − max_log2)  (∈ (0, WSCALE], 정수)
+ *   비율(lws/lwt)에서 정규화 상수가 상쇄되어 overflow 없이 동일 분포를 얻는다.
+ *   분포 계산 hot path 에 double 없음. LUT 는 init 에서 1회 생성(step4 에서 const 베이크).
  *
- * 후속: 정수 LUT(3), MCU(4).
+ * 후속: aux 정수화 + MCU 빌드(4).
  */
 #include <string.h>
 #include <stdlib.h>
 #include <math.h>
+#include <stdint.h>
 #include "btv3.h"
 
 #define BT_POOL       (8*1024*1024)
-#define BT_SLOTS      (1<<24)            /* 16M open-addr 슬롯 (load ≤ 0.5) */
+#define BT_SLOTS      (1<<24)
 #define BT_SLOT_MASK  (BT_SLOTS-1)
 #define BT_MAX_DEPTH  24
 #define BT_LEVELS_V4  6
-#define BLOOM_BITS    (1<<24)            /* 16M bits (2MB) — 단계 2 확장 */
+#define BLOOM_BITS    (1<<24)
 #define BLOOM_MASK    (BLOOM_BITS-1)
 
 #define CTX_POOL      (4*1024*1024)
-#define CTX_SLOTS     (1<<23)            /* 8M open-addr 슬롯 */
+#define CTX_SLOTS     (1<<23)
 #define CTX_SLOT_MASK (CTX_SLOTS-1)
+
+/* ── 고정소수 파라미터 ───────────────────────────────────── */
+#define LOG2_FB    16                 /* log2 값 Q16 */
+#define PRES_BITS  16                 /* p 양자화 해상도 (CONF_LOG2 인덱스) */
+#define PRES       (1<<PRES_BITS)
+#define WBITS      28                 /* 가중치 스케일 Q28 */
+#define WSCALE     ((int64_t)1<<WBITS)
+#define PBITS      28                 /* 확률 스케일 Q28 */
+#define PSCALE     ((int64_t)1<<PBITS)
+#define EXP2_FB    16                 /* EXP2 분수부 해상도 */
+#define EXP2_FN    (1<<EXP2_FB)
+#define CONF_EXP   20                 /* conf 지수 */
 
 typedef struct { unsigned char ctx[BT_MAX_DEPTH]; unsigned char ctx_len, next_byte; unsigned int freq; int ctx_next; } BtEntry;
 typedef struct { unsigned char ctx[BT_MAX_DEPTH]; unsigned char ctx_len; unsigned int total_freq, unique_next; int first_entry; } CtxEntry;
 
 static CtxEntry  g_ctx_pool[CTX_POOL];
-static int      *g_ctx_slot;             /* heap, CTX_SLOTS */
+static int      *g_ctx_slot;
 static unsigned long g_ctx_used;
-static BtEntry  *g_pool;                 /* heap, BT_POOL */
-static int      *g_bt_slot;              /* heap, BT_SLOTS */
+static BtEntry  *g_pool;
+static int      *g_bt_slot;
 static unsigned long g_pool_used;
 static unsigned char g_bloom[BLOOM_BITS/8];
 static unsigned char g_window[BT_MAX_DEPTH];
 static int g_win_len;
-static double EXP_N[BT_MAX_DEPTH + 1];
 
-typedef struct { int dmin,dmax; double weight; } BtLevel;
+/* LUT (init 에서 생성) */
+static int32_t EXP_LOG2[BT_MAX_DEPTH+1];   /* Q16: log2(exp(n)) */
+static int32_t *CONF_LOG2;                 /* [PRES] Q16: 20·log2(conf(p)) */
+static int32_t *EXP2_FRAC;                 /* [EXP2_FN] WSCALE·2^(-frac) */
+
+typedef struct { int dmin,dmax; int wint; } BtLevel;   /* wint = round(weight*256) */
 static BtLevel LEVELS[BT_LEVELS_V4] = {
-    {1,2,0.9},{3,4,1.3},{5,8,1.5},{9,12,1.7},{13,16,1.5},{17,24,1.1}
+    {1,2,230},{3,4,333},{5,8,384},{9,12,435},{13,16,384},{17,24,282}
 };
 
-/* pow(x,20) = x^20 (정수 지수) → 5회 곱 */
-static inline double pow20(double x){ double a=x*x; a=a*a; double b=a; a=a*a; a=a*a; return a*b; }
-
 static inline unsigned int fnv(const unsigned char *d, int n){unsigned int h=2166136261u;for(int i=0;i<n;i++){h^=d[i];h*=16777619u;}return h;}
+
+/* 2^(norm_q16), norm<=0 → (0, WSCALE] 정수 */
+static inline int64_t exp2_w(int64_t norm_q16){
+    int64_t neg = -norm_q16;                 /* >=0, Q16 */
+    int ip = (int)(neg >> LOG2_FB);
+    if (ip >= 40) return 0;
+    int fr = (int)(neg & (EXP2_FN-1));
+    return (int64_t)EXP2_FRAC[fr] >> ip;
+}
 
 /* ── CtxEntry open addressing ─────────────────────────────── */
 static inline CtxEntry* ctx_find_h(const unsigned char *ctx, int cl, unsigned int ch){
@@ -101,14 +126,12 @@ static void bt_update(const unsigned char *ctx, int cl, unsigned char next){
     if(cl<=0||cl>BT_MAX_DEPTH)return;
     unsigned int ch=fnv(ctx,cl);
     bloom_set(ctx,cl);
-
-    /* BtEntry open-addr find / insert */
     unsigned int h = ((ch ^ next) * 16777619u) & BT_SLOT_MASK;
     int is_new; long new_idx = -1;
     for(;;){
         int s = g_bt_slot[h];
         if(s < 0){
-            if(g_pool_used >= BT_POOL) return;   /* pool full: v0 와 동일하게 ctx 갱신 없이 반환 */
+            if(g_pool_used >= BT_POOL) return;
             new_idx = (long)g_pool_used;
             BtEntry *e = &g_pool[new_idx];
             memcpy(e->ctx,ctx,cl); e->ctx_len=cl; e->next_byte=next; e->freq=1; e->ctx_next=-1;
@@ -119,7 +142,6 @@ static void bt_update(const unsigned char *ctx, int cl, unsigned char next){
         if(e->ctx_len==cl && e->next_byte==next && memcmp(e->ctx,ctx,cl)==0){ e->freq++; is_new=0; break; }
         h = (h+1) & BT_SLOT_MASK;
     }
-
     CtxEntry *cc = ctx_get_h(ctx,cl,ch);
     if(cc){
         cc->total_freq++;
@@ -130,21 +152,40 @@ static void bt_update(const unsigned char *ctx, int cl, unsigned char next){
     }
 }
 
+static void build_luts(void){
+    if(!CONF_LOG2)  CONF_LOG2  = (int32_t*)malloc(sizeof(int32_t)*PRES);
+    if(!EXP2_FRAC)  EXP2_FRAC  = (int32_t*)malloc(sizeof(int32_t)*EXP2_FN);
+    double l2e = 1.0/log(2.0);
+    for(int n=0;n<=BT_MAX_DEPTH;n++)
+        EXP_LOG2[n] = (int32_t)llround((double)n * l2e * (double)(1<<LOG2_FB));
+    for(int i=0;i<PRES;i++){
+        double p = ((double)i + 0.5)/(double)PRES;     /* p 의 대표값 */
+        double conf = p*256.0; if(conf<1.0) conf=1.0;
+        CONF_LOG2[i] = (int32_t)llround((double)CONF_EXP * (log(conf)*l2e) * (double)(1<<LOG2_FB));
+    }
+    for(int f=0;f<EXP2_FN;f++){
+        double frac = (double)f/(double)EXP2_FN;       /* [0,1) */
+        EXP2_FRAC[f] = (int32_t)llround(pow(2.0, -frac) * (double)WSCALE);
+    }
+}
+
 void bt_v3_init(void){
     if(!g_pool)     g_pool     = (BtEntry*)malloc(sizeof(BtEntry)*BT_POOL);
     if(!g_bt_slot)  g_bt_slot  = (int*)malloc(sizeof(int)*BT_SLOTS);
     if(!g_ctx_slot) g_ctx_slot = (int*)malloc(sizeof(int)*CTX_SLOTS);
+    build_luts();
     memset(g_bt_slot,  -1, sizeof(int)*BT_SLOTS);
     memset(g_ctx_slot, -1, sizeof(int)*CTX_SLOTS);
     memset(g_bloom, 0, sizeof(g_bloom));
     memset(g_window, 0, sizeof(g_window));
     g_win_len=0; g_ctx_used=0; g_pool_used=0;
-    for(int n=0;n<=BT_MAX_DEPTH;n++) EXP_N[n]=exp((double)n);
 }
 void bt_v3_free(void){
     free(g_pool); g_pool=NULL;
     free(g_bt_slot); g_bt_slot=NULL;
     free(g_ctx_slot); g_ctx_slot=NULL;
+    free(CONF_LOG2); CONF_LOG2=NULL;
+    free(EXP2_FRAC); EXP2_FRAC=NULL;
 }
 void bt_v3_train(unsigned char b){
     for(int n=1;n<=g_win_len&&n<=BT_MAX_DEPTH;n++)
@@ -153,76 +194,98 @@ void bt_v3_train(unsigned char b){
     else{memmove(g_window,g_window+1,BT_MAX_DEPTH-1);g_window[BT_MAX_DEPTH-1]=b;}
 }
 
-/* base(미관측 기본) + delta(관측 보정) 로 256바이트 분포를 한 번에 계산 */
+/* 정수 전용 분포 계산. 레벨마다:
+ *   pass A — 활성 context 수집 + log2_w 최대값(max_log2) 탐색
+ *   pass B — w=EXP2(log2_w−max) 로 base(미관측)+delta(관측) 누적 → byte별 prob_lv
+ * 레벨 가중 결합 → 정규화·alpha-blend·scale 양자화. */
 void bt_v3_distribution(unsigned int *cum_out, unsigned int scale) {
-    double probs[256];
+    static int64_t probs[256];   /* Q28 */
 
     if (g_win_len == 0) {
-        for (int b = 0; b < 256; b++) probs[b] = 1.0/256.0;
+        for (int b=0;b<256;b++) probs[b] = PSCALE/256;
     } else {
-        double ws[256], wt[256], dlws[256], dlwt[256];
-        for (int b = 0; b < 256; b++) { ws[b]=0; wt[b]=0; }
+        int64_t ws[256], wt[256];
+        for (int b=0;b<256;b++){ ws[b]=0; wt[b]=0; }
 
-        for (int lv = 0; lv < BT_LEVELS_V4; lv++) {
-            int dmin = LEVELS[lv].dmin, dmax = LEVELS[lv].dmax;
+        /* 활성 context 캐시 + context별 byte 빈도표 (레벨 내) */
+        static int      act_n[BT_MAX_DEPTH];
+        static unsigned act_total[BT_MAX_DEPTH];
+        static int64_t  act_l0[BT_MAX_DEPTH], act_p0[BT_MAX_DEPTH];
+        static unsigned act_freq[BT_MAX_DEPTH][256];
+
+        for (int lv=0; lv<BT_LEVELS_V4; lv++) {
+            int dmin=LEVELS[lv].dmin, dmax=LEVELS[lv].dmax;
             int start = g_win_len<dmax?g_win_len:dmax;
-            for (int b = 0; b < 256; b++) { dlws[b]=0; dlwt[b]=0; }
-            double base_lws=0, base_lwt=0; int any=0;
+            int nact=0;
 
+            /* 활성 context 수집 + 빈도표 구축 */
             for (int n=start; n>=dmin; n--) {
-                if (n > g_win_len) continue;
-                const unsigned char *ctx = g_window + (g_win_len - n);
+                if (n>g_win_len) continue;
+                const unsigned char *ctx = g_window + (g_win_len-n);
                 if (!bloom_chk(ctx,n)) continue;
                 unsigned int ch = fnv(ctx,n);
                 CtxEntry *cc = ctx_find_h(ctx,n,ch);
-                if (!cc || cc->total_freq == 0) continue;
-                any = 1;
-                double total = (double)cc->total_freq;
-                double en = EXP_N[n];
-                double p0 = 1.0/(total+256.0);
-                double conf0 = p0*256.0; if (conf0<1.0) conf0=1.0;
-                double w0 = en*pow20(conf0);
-                base_lws += w0*p0; base_lwt += w0;
-                for (int idx=cc->first_entry; idx>=0; idx=g_pool[idx].ctx_next) {
-                    BtEntry *e = &g_pool[idx];
-                    int b = e->next_byte;
-                    double p = (double)e->freq/total;
-                    double conf = p*256.0; if (conf<1.0) conf=1.0;
-                    double w = en*pow20(conf);
-                    dlws[b] += w*p - w0*p0;
-                    dlwt[b] += w - w0;
-                }
+                if (!cc || cc->total_freq==0) continue;
+                unsigned total = cc->total_freq;
+                int a = nact++;
+                act_n[a]=n; act_total[a]=total;
+                int idx0 = (int)(PRES/(int64_t)(total+256)); if(idx0>=PRES)idx0=PRES-1;
+                act_l0[a] = (int64_t)EXP_LOG2[n] + CONF_LOG2[idx0];
+                act_p0[a] = PSCALE/(int64_t)(total+256);
+                memset(act_freq[a], 0, 256*sizeof(unsigned));
+                for (int idx=cc->first_entry; idx>=0; idx=g_pool[idx].ctx_next)
+                    act_freq[a][g_pool[idx].next_byte] = g_pool[idx].freq;
             }
-            if (any) {
-                double Wlv = LEVELS[lv].weight;
-                for (int b = 0; b < 256; b++) {
-                    double lwt_b = base_lwt + dlwt[b];
-                    if (lwt_b > 0) {
-                        double lws_b = base_lws + dlws[b];
-                        ws[b] += Wlv*(lws_b/lwt_b);
-                        wt[b] += Wlv;
+            if (nact==0) continue;
+
+            /* byte별로 자기 context들 중 max 로 정규화(scale-invariant, underflow 방지) */
+            int W = LEVELS[lv].wint;
+            for (int b=0;b<256;b++) {
+                int64_t tl[BT_MAX_DEPTH], tp[BT_MAX_DEPTH];
+                int64_t max_l = INT64_MIN;
+                for (int a=0; a<nact; a++) {
+                    unsigned f = act_freq[a][b];
+                    int64_t l, p;
+                    if (f>0) {
+                        unsigned total = act_total[a];
+                        int ii = (int)(((int64_t)f*PRES)/total); if(ii>=PRES)ii=PRES-1;
+                        l = (int64_t)EXP_LOG2[act_n[a]] + CONF_LOG2[ii];
+                        p = ((int64_t)f*PSCALE)/total;
+                    } else {
+                        l = act_l0[a]; p = act_p0[a];
                     }
+                    tl[a]=l; tp[a]=p; if(l>max_l) max_l=l;
+                }
+                int64_t num=0, den=0;
+                for (int a=0; a<nact; a++) {
+                    int64_t w = exp2_w(tl[a] - max_l);
+                    num += w*tp[a]; den += w;
+                }
+                if (den>0) {
+                    int64_t prob_lv = num / den;             /* Q PBITS */
+                    ws[b] += (int64_t)W * prob_lv;
+                    wt[b] += (int64_t)W;
                 }
             }
         }
-        for (int b = 0; b < 256; b++) {
-            double prob = wt[b]>0 ? ws[b]/wt[b] : 1.0/256.0;
-            if (prob<1e-12) prob=1e-12;
-            if (prob>1.0) prob=1.0;
+        for (int b=0;b<256;b++) {
+            int64_t prob = wt[b]>0 ? ws[b]/wt[b] : (PSCALE/256);
+            if (prob<1) prob=1;
+            if (prob>PSCALE) prob=PSCALE;
             probs[b]=prob;
         }
     }
 
-    double s = 0;
-    for (int b=0; b<256; b++) s += probs[b];
+    /* 정규화 + alpha-blend(0.95/0.05) + scale 양자화 (정수) */
+    int64_t s = 0;
+    for (int b=0;b<256;b++) s += probs[b];
     if (s <= 0) { unsigned int w=scale/256; for(int b=0;b<256;b++)cum_out[b]=b*w; cum_out[256]=scale; return; }
-    double alpha=0.05, u=1.0/256.0;
+    int64_t base_w = (50*(int64_t)scale)/(1000*256);   /* alpha·scale/256 */
     unsigned int acc = 0;
-    for (int b=0; b<256; b++) {
-        double m = (1-alpha)*(probs[b]/s) + alpha*u;
-        unsigned int w = (unsigned int)(m*scale);
+    for (int b=0;b<256;b++) {
+        int64_t w = (950*(int64_t)scale*probs[b])/(1000*s) + base_w;
         if (w<1) w=1;
-        cum_out[b] = acc; acc += w;
+        cum_out[b] = acc; acc += (unsigned int)w;
     }
     cum_out[256] = acc;
 }

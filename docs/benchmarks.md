@@ -186,12 +186,39 @@ v0 는 50K→200K 에서 0.42s→7.17s (4× 데이터에 ~17× 시간 = O(n²) �
 **남은 병목**: `v3_entries` 가 500K 부터 BT_POOL 상한 8M 에 포화 → 더 큰 학습엔 pool 확대 필요
 (1M 압축비가 500K 보다 낮은 것도 pool 포화 + 발췌 위치 차이 영향). pool 크기 조정은 후속 과제.
 
+## v3 단계 3 — 정수 전용 hot path (log-domain)
+
+`w = exp(n)·conf²⁰` 은 `conf²⁰` 가 uint64 를 초과(conf≤256 → 2¹⁶⁰)해 직접 정수화 불가.
+**log2 영역**으로 우회: `log2_w = EXP_LOG2[n] + CONF_LOG2[p]` (둘 다 Q16 정수 LUT),
+**byte별 자기 context max 로 정규화** → `w_int = EXP2(log2_w − max)` (∈(0,WSCALE], 정수).
+비율 `Σw·p/Σw` 에서 정규화 상수가 상쇄돼 overflow 없이 분포를 얻는다. 분포 hot path 에 **double 없음**
+(LUT 는 init 1회 생성; MCU 용 const 베이크는 단계 4).
+
+> 설계 메모: 처음엔 *레벨별 전역 max* 로 정규화했더니, 지배 byte 보다 conf 가 4× 이상 낮은 byte 들이
+> 전부 0 으로 underflow → 균등분포로 무너져 +17% 악화했다. **byte별 정규화**(scale-invariant)로
+> 교정하니 −0.13% 로 들어왔다. 전역 carry-tick 을 *예측 context* 가 아니라 *정수 표현*에만 쓰라는
+> 호시 지침과 같은 맥락 — 정규화 기준을 byte 단위로 잡는 것이 핵심.
+
+v0 vs 정수 v3 (`make v3-compare`, 50KB, 4권):
+
+| 책 | v0(B) | int-v3(B) | ratioΔ | lossless |
+|----|-------|-----------|--------|----------|
+| pride | 1522 | 1520 | −0.13% | yes |
+| frankenstein | 1542 | 1540 | −0.13% | yes |
+| alice | 1435 | 1433 | −0.14% | yes |
+| moby_dick | 1638 | 1636 | −0.12% | yes |
+| 합계 | 6137 | 6129 | **−0.13%** | yes |
+
+±0.5% 이내(오히려 −0.13% 미세 개선), 4권 무손실, hot path 정수. 인코드는 v0 대비 **28.5×** 가속
+(byte별 정규화로 단계2 의 74× 보다 작업량↑이나 double 제거가 목표). 대규모 학습도 정수 버전에서
+1M 까지 무손실 유지(`make v3-scale`: 50K 2.36× / 200K 2.67× / 500K 2.84× / 1M 2.65×).
+
 ### 결정 요약
 
 - **v2 (시계계층)**: 폐기.
-- **v3 (정수 BT)**: 단계별 진행. **단계 1·2 완료** — distribution caching + open addressing,
-  v0 비트동일, 74.2× 가속, 1M 학습 초 단위. 다음: (3) 정수 LUT, (4) aux 정수화 + MCU 빌드.
-  (남은 병목: BT_POOL 8M 포화 — pool 확대 검토.)
+- **v3 (정수 BT)**: 단계별 진행. **단계 1·2·3 완료** — distribution caching + open addressing +
+  정수 hot path(log-domain). v0 대비 −0.13%(±0.5% 이내), 28.5× 가속, 1M 학습 무손실.
+  다음: (4) aux 정수화 + MCU const 베이크. (남은 병목: BT_POOL 8M 포화 — pool 확대 검토.)
 - **v4 (보조채널)**: distribution blend 방식 `AuxChannel` 라이브러리. 4채널 **측정 완료** —
   단독 +0.6~0.8%, combo **+2.60%** (무손실). 다음: v3 정수화와 결합.
 
