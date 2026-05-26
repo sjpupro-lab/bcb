@@ -97,7 +97,7 @@ bindings/python/        ctypes wrapper (작업 예정)
 ## 정직한 한계 / Honest limits
 
 - 랜덤 데이터는 압축 불가 (Shannon). BCB 도 못 한다. 정상.
-- n-gram BT 의 한계 ≈ BPB 2.0 (약 4× 압축). 그 이상은 LLM/transformer 영역.
+- 현재 v0 측정값 ≈ BPB 2.0 (약 4× 압축). v2 시계계층 좌표, v4 보조채널 등 후속 작업에서 추가 개선 측정 예정.
 - 인코드 속도 ≈ 2 KB/s (바이트당 256 lookup). v3 에서 캐싱으로 가속 예정.
 - full BT pool ≈ 256MB+. MCU 빌드는 v3 에서 별도 구성.
 
