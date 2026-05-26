@@ -104,6 +104,25 @@ context 를 안 건드리고 byte type prior 를 별도 학습해 α=0.985 로 b
 
 4권 중 3권 일관 개선 → 노이즈가 아닌 신호. type-prior 가 BT 미학습 거시 전이(알파벳→공백 등)를 보정.
 
+### v4 byte_type — 레포 재현 (`make v4-aux`)
+
+`src/v4_aux_channel/aux.c` 의 `AuxChannel` (byte_type, 7-type, α=0.985) 구현으로 재측정
+(50KB 학습 / 4KB 발췌 @ off 60000, baseline=v1a):
+
+| 책 | base(B) | +aux(B) | 개선 | lossless |
+|----|---------|---------|------|----------|
+| pride | 1518 | 1508 | +0.66% | yes |
+| frankenstein | 1538 | 1528 | +0.65% | yes |
+| alice | 1431 | 1421 | +0.70% | yes |
+| moby_dick | 1634 | 1623 | +0.67% | yes |
+| 합계 | 6121 | 6080 | **+0.67%** | yes |
+
+**4권 전부** 일관 개선(+0.67%), 전부 무손실. 원 보고(+0.41%, 3/4)를 재현·상회.
+(절대 바이트는 발췌/학습창 차이로 보고값과 다름 — 방향·일관성이 핵심.)
+
+타입 분류: space / newline / lower / upper / digit / punct / other (7종).
+blend: `P_final(b) = α·P_BT(b) + (1−α)·P(type|prev_type)·P(b|type)`, symdist 로 합=scale·각 빈≥1 보장.
+
 ### 결정 요약
 
 - **v2 (시계계층)**: 폐기.
