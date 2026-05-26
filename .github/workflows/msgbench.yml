@@ -1,0 +1,23 @@
+name: msgbench regression
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  msgbench:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install brotli/zstd dev libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libbrotli-dev libzstd-dev
+
+      - name: Round-trip test
+        run: make test
+
+      - name: Small-message regression (BCB ratios within 2% of baseline)
+        run: make msgbench-check

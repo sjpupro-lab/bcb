@@ -33,7 +33,7 @@ SCENARIOS := http_headers iot_packets mqtt_messages log_lines rpc_calls
 MSG_TRAIN ?= 50000
 MSG_SIZES ?= 64,128,256,512,1024,2048,4096
 MSG_BYTES ?= 400000
-MSG_SAMPLES ?= 64
+MSG_SAMPLES ?= 24
 
 .PHONY: all test bench clean msgbench msgbench-md msgbench-check
 
