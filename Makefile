@@ -185,9 +185,12 @@ $(BUILD)/corpus_modbus.bin: $(SCN)/modbus.py | $(BUILD)
 	python3 $< --bytes $(MSG_BYTES) > $@
 $(BUILD)/corpus_canbus.bin: $(SCN)/canbus.py | $(BUILD)
 	python3 $< --bytes $(MSG_BYTES) > $@
+$(BUILD)/corpus_iot_single.bin: $(SCN)/iot_packets.py | $(BUILD)
+	python3 $< --bytes $(MSG_BYTES) --devices 1 > $@      # 단일 device stream (per-device 천장)
 
-structbench: $(BUILD)/bcb-structbench $(BUILD)/corpus_iot_packets.bin $(BUILD)/corpus_binary_record.bin $(BUILD)/corpus_modbus.bin $(BUILD)/corpus_canbus.bin
-	@./$(BUILD)/bcb-structbench --corpus $(BUILD)/corpus_iot_packets.bin    --record-size 18 --train-size $(MSG_TRAIN) --label iot_packets
+structbench: $(BUILD)/bcb-structbench $(BUILD)/corpus_iot_packets.bin $(BUILD)/corpus_iot_single.bin $(BUILD)/corpus_binary_record.bin $(BUILD)/corpus_modbus.bin $(BUILD)/corpus_canbus.bin
+	@./$(BUILD)/bcb-structbench --corpus $(BUILD)/corpus_iot_packets.bin    --record-size 18 --train-size $(MSG_TRAIN) --label "iot (8-dev interleave)"
+	@./$(BUILD)/bcb-structbench --corpus $(BUILD)/corpus_iot_single.bin     --record-size 18 --train-size $(MSG_TRAIN) --label "iot (single device)"
 	@./$(BUILD)/bcb-structbench --corpus $(BUILD)/corpus_binary_record.bin  --record-size 32 --train-size $(MSG_TRAIN) --label binary_record
 	@./$(BUILD)/bcb-structbench --corpus $(BUILD)/corpus_modbus.bin         --record-size 25 --train-size $(MSG_TRAIN) --label modbus
 	@./$(BUILD)/bcb-structbench --corpus $(BUILD)/corpus_canbus.bin         --record-size 16 --train-size $(MSG_TRAIN) --label canbus
