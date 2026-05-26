@@ -39,7 +39,7 @@ MSG_SIZES ?= 64,128,256,512,1024,2048,4096
 MSG_BYTES ?= 400000
 MSG_SAMPLES ?= 24
 
-.PHONY: all test bench clean msgbench msgbench-md msgbench-landmark msgbench-check prior prior-equiv prior-rss hpack hpack-docs landmark landmark-verify landmark-bench landmark-bench-docs
+.PHONY: all test bench clean msgbench msgbench-md msgbench-landmark msgbench-check prior prior-equiv prior-rss hpack hpack-docs landmark landmark-verify landmark-bench landmark-bench-docs structbench
 
 all: $(BUILD)/bcb-cli $(BUILD)/bcb-bench
 
@@ -173,6 +173,24 @@ landmark: $(BUILD)/bcb-landmark $(addprefix $(BUILD)/corpus_,$(addsuffix .bin,$(
 	  ./$(BUILD)/bcb-landmark --corpus $(BUILD)/corpus_$$s.bin --train-size $(MSG_TRAIN) \
 	    --n $(LM_N) --md --label $$s; \
 	done
+
+# ── Structural (position-aware) landmark — v6 PR-1 측정 ──────
+$(BUILD)/bcb-structbench: tools/bcb-structbench.c $(V0_SRC) $(V3_SRC) | $(BUILD)
+	$(CC) $(CFLAGS) $(V0_INC) $(V3_INC) -o $@ $^ $(LDLIBS)
+
+# 고정 레코드 binary 시나리오 (record-size 명시)
+$(BUILD)/corpus_binary_record.bin: $(SCN)/binary_record.py | $(BUILD)
+	python3 $< --bytes $(MSG_BYTES) > $@
+$(BUILD)/corpus_modbus.bin: $(SCN)/modbus.py | $(BUILD)
+	python3 $< --bytes $(MSG_BYTES) > $@
+$(BUILD)/corpus_canbus.bin: $(SCN)/canbus.py | $(BUILD)
+	python3 $< --bytes $(MSG_BYTES) > $@
+
+structbench: $(BUILD)/bcb-structbench $(BUILD)/corpus_iot_packets.bin $(BUILD)/corpus_binary_record.bin $(BUILD)/corpus_modbus.bin $(BUILD)/corpus_canbus.bin
+	@./$(BUILD)/bcb-structbench --corpus $(BUILD)/corpus_iot_packets.bin    --record-size 18 --train-size $(MSG_TRAIN) --label iot_packets
+	@./$(BUILD)/bcb-structbench --corpus $(BUILD)/corpus_binary_record.bin  --record-size 32 --train-size $(MSG_TRAIN) --label binary_record
+	@./$(BUILD)/bcb-structbench --corpus $(BUILD)/corpus_modbus.bin         --record-size 25 --train-size $(MSG_TRAIN) --label modbus
+	@./$(BUILD)/bcb-structbench --corpus $(BUILD)/corpus_canbus.bin         --record-size 16 --train-size $(MSG_TRAIN) --label canbus
 
 # PR-2 검증: landmark prior 무손실 + 압축비 (base vs landmark), 4 시나리오.
 LM_K ?= 512

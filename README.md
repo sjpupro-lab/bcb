@@ -161,10 +161,10 @@ src/v1_symmetric_dist/  분포 합=1 정규화
 src/v3_integer_bt/      정수 BT (caching, open addressing, log-domain, MCU)
 src/v4_aux_channel/     보조채널 (distribution blend)
 src/v5_mmap_prior/      prior 직렬화 + mmap 로드 (frozen)
-tests/scenarios/        작은 메시지 generator (HTTP/IoT/MQTT/log/RPC, http2) + 회귀 baseline
+tests/scenarios/        작은 메시지 generator (HTTP/IoT/MQTT/log/RPC, http2, binary_record/modbus/canbus) + 회귀 baseline
 tests/corpus/           Gutenberg 4권 (레거시 텍스트 벤치)
 tools/                  bcb-cli, bcb-bench, bcb-msgbench, bcb-meminfo, bcb-prior-build, bcb-prior-test, bcb-blockbench, bcb-landmark, bcb_vs_hpack.py, landmark_bench.py
-docs/                   benchmarks(작은 메시지), use_cases, theory, mcu, benchmarks_legacy, mmap_prior, hpack_comparison, landmark
+docs/                   benchmarks(작은 메시지), use_cases, theory, mcu, benchmarks_legacy, mmap_prior, hpack_comparison, landmark, structural_landmark
 ```
 
 ---
