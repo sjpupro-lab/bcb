@@ -233,12 +233,29 @@ v0 vs 정수 v3 (`make v3-compare`, 50KB, 4권):
 - **MCU 빌드** (`make meminfo`, `-DBCB_MCU`): footprint **546.5MB → 3.56MB**, 무손실 유지
   (압축비는 pool 포화로 desktop 4.55× → MCU 3.06×). 상세 `docs/mcu.md`.
 
+## BT_POOL 확장 1 — 고정 크기 비교 (`make v3-pool`)
+
+`-DBCB_POOL_BITS=N` 으로 BT_POOL=2^N 조정(기본 23=8M, 25=32M, 26=64M). MCU 빌드는 소형 유지.
+diverse ~11.2MB 코퍼스(`tests/corpus/large.txt`, `fetch_large.sh` 로 생성)로 대규모 학습 측정:
+
+| pool | footprint | 4MB 학습 | 10MB 학습 | 포화 |
+|------|-----------|----------|-----------|------|
+| 8M  | 546 MB  | 2.80× | 2.89× | 4MB·10MB 모두 포화 |
+| 32M | 2.18 GB | 2.96× | 3.04× | 4MB·10MB 모두 포화 |
+| 64M | 4.35 GB | **3.06×** | 3.04× | 4MB 미포화 / 10MB 포화 |
+
+- **pool↑ → 압축비↑** (4MB 학습 2.80→2.96→3.06×). 4MB/10MB 학습 모두 가능·무손실.
+- **diverse 텍스트 4MB 가 BT entry ~62M 개를 생성** → 8M/32M 는 즉시 포화, 64M 만 4MB 에서 미포화.
+  10MB 학습은 64M 도 포화(필요 entry > 67M) → 고정 pool 의 한계.
+- 고정 64M 사전할당은 4.35GB 로 비효율(미사용분 포함). entry 수에 비례하는
+  **동적 할당**이 다음 단계(확장 2)의 동기.
+
 ### 결정 요약
 
 - **v2 (시계계층)**: 폐기.
-- **v3 (정수 BT)**: **단계 1~4 완료** — distribution caching + open addressing + 정수 hot path +
-  libm 제거 + MCU 빌드. v0 대비 −0.13%(±0.5% 이내), hot path/LUT 정수, 1M 학습 무손실, MCU 3.56MB.
-  (남은 병목: BT_POOL 포화 — pool 확대 검토.)
+- **v3 (정수 BT)**: **단계 1~4 완료** + **pool 확장 진행**. distribution caching + open addressing +
+  정수 hot path + libm 제거 + MCU. pool 크기 조정 가능(`-DBCB_POOL_BITS`): 8M→64M 에서 4MB 학습
+  2.80→3.06×. 다음: 동적 할당(확장 2). MCU 3.56MB.
 - **v4 (보조채널)**: distribution blend `AuxChannel` 라이브러리, 정수화 완료. 정수 v3 파이프라인에서
   단독 +0.95~1.11%, **combo +2.94%** (무손실).
 

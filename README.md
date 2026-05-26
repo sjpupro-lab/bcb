@@ -69,7 +69,10 @@ make v3-compare   # v0 vs v3: 동등성·속도 (4권)
 make v3-scale     # v3 대규모 학습 스케일링 (open addressing)
 make v4-aux       # 보조채널 ablation (정수, v3 파이프라인)
 make meminfo      # v3 메모리 footprint (desktop / MCU) + 무손실 점검
+make v3-pool      # BT_POOL 8M/32M/64M 대규모 학습 비교 (large.txt 필요)
 ```
+
+대규모 학습 코퍼스: `sh tests/corpus/fetch_large.sh` 로 `tests/corpus/large.txt`(~11MB) 생성.
 
 요구사항: C99 컴파일러 + libm (`-lm`). 외부 라이브러리 의존성 없음.
 
