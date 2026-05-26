@@ -1,3 +1,7 @@
+/* BCB — Binary Compression by BT
+ * Copyright (c) 2026 호시 <jahyag@gmail.com>
+ * Licensed under the MIT License. See LICENSE.
+ */
 /* ce_compress.c — implementation */
 #include "ce_compress.h"
 #include "bt_model.h"
