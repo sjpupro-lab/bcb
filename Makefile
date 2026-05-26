@@ -65,6 +65,13 @@ $(BUILD)/test_v3_compare: tests/test_v3_compare.c $(V0_SRC) $(V3_SRC) | $(BUILD)
 v3-compare: $(BUILD)/test_v3_compare
 	./$(BUILD)/test_v3_compare
 
+$(BUILD)/test_v3_scale: tests/test_v3_scale.c $(V0_SRC) $(V3_SRC) | $(BUILD)
+	$(CC) $(CFLAGS) $(V0_INC) $(V3_INC) -o $@ $^ $(LDLIBS)
+
+# v3 open addressing 대규모 학습 스케일링 (v0 vs v3 학습시간)
+v3-scale: $(BUILD)/test_v3_scale
+	./$(BUILD)/test_v3_scale
+
 bench: $(BUILD)/bcb-bench
 	./$(BUILD)/bcb-bench $(CORPUS)
 
