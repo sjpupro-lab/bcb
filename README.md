@@ -77,6 +77,10 @@ HTTP 텍스트 헤더는 LZ 친화적이라 128B 부터 brotli 가 앞선다. **
   (300KB 학습 prior 기준 3.74s→**0.028s**), 비트 동일·무손실, 프로세스 간 page 공유.
   단, 단일 프로세스 RSS 는 해시 조회 분산 탓에 <5MB 까지 줄지 않는다(sub-6MB 는 MCU 빌드).
   상세·정직한 한계: `docs/mmap_prior.md`.
+- **landmark prior index** (`--landmark-k`): prior 안 빈출 context 에 sharper cum 을 박아
+  hit 시 predict 를 건너뛴다 — 압축비·속도 동시 향상, 무손실(저장된 정수 cum 을 enc/dec 가 공유).
+  실측: **HTTP 헤더 +30~42% & ~4× 속도**, MQTT/syslog +8~16%, **IoT 0%**(고엔트로피 binary).
+  message 단위 random access 가능(sub-message 는 불가 — 정직한 한계). 상세: `docs/landmark.md`.
 
 ---
 
@@ -138,7 +142,7 @@ make prior            # 동등성(in-memory=mmap 비트 동일) + RSS·처리량
 | v2 (시계계층) | carry-tick 좌표를 BT context 에 mix | **폐기** (fragmentation) |
 | **v3** `src/v3_integer_bt` | caching → open addressing → 정수 hot path → libm 제거 + MCU | v0 대비 −0.13%, ~28× 가속, MCU 3.56MB |
 | **v4** `src/v4_aux_channel` | 거시 통계 보조채널 (distribution blend) | combo +2.94%, 무손실 |
-| **v5** `src/v5_mmap_prior` | prior 직렬화 + mmap 로드 (frozen, 읽기 전용) | 비트 동일·무손실, 즉시 시작 |
+| **v5** `src/v5_mmap_prior` | prior 직렬화 + mmap 로드 (frozen) + landmark prior index | 비트 동일·무손실, 즉시 시작, HTTP +30~42% & ~4× |
 
 설계·측정 기록: `docs/theory.md`, `docs/benchmarks.md`, `docs/benchmarks_legacy.md`, `docs/mcu.md`, `docs/mmap_prior.md`.
 
@@ -154,7 +158,7 @@ src/v4_aux_channel/     보조채널 (distribution blend)
 src/v5_mmap_prior/      prior 직렬화 + mmap 로드 (frozen)
 tests/scenarios/        작은 메시지 generator (HTTP/IoT/MQTT/log/RPC, http2) + 회귀 baseline
 tests/corpus/           Gutenberg 4권 (레거시 텍스트 벤치)
-tools/                  bcb-cli, bcb-bench, bcb-msgbench, bcb-meminfo, bcb-prior-build, bcb-prior-test, bcb-blockbench, bcb-landmark, bcb_vs_hpack.py
+tools/                  bcb-cli, bcb-bench, bcb-msgbench, bcb-meminfo, bcb-prior-build, bcb-prior-test, bcb-blockbench, bcb-landmark, bcb_vs_hpack.py, landmark_bench.py
 docs/                   benchmarks(작은 메시지), use_cases, theory, mcu, benchmarks_legacy, mmap_prior, hpack_comparison, landmark
 ```
 

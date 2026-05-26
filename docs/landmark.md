@@ -85,6 +85,49 @@ prior 파일에 landmark section 추가: top-K 길이-N context + **정수 양�
 메모리: landmark 가 prior 파일에 `K·N + K·512` 바이트 추가(K=512,N=8 → ~264KB), 로드 시 RAM
 해시(K·2 int) 만. 비-landmark prior(lm_k=0)는 기존과 비트 동일 동작.
 
-## PR-3 계획
+## PR-3 — 측정 + 벤치마크 (base vs landmark, 전 크기)
 
-throughput(메시지/초)·cold-start 시간·random-access 시연 + msgbench 표/README 갱신.
+`make landmark-bench` 실측 (train 50KB, K=512, N=8, 최대 2000블록/크기, **실제 코딩 바이트**, 전부 무손실):
+
+| 시나리오 | 크기 | base× | land× | 압축 이득 | base b/s | land b/s | 속도 |
+|---|---|---|---|---|---|---|---|
+| http_headers | 64 | 5.13 | **6.68** | +30.2% | 791 | 2828 | 3.6× |
+| http_headers | 128 | 5.52 | **7.50** | +35.8% | 396 | 1457 | 3.7× |
+| http_headers | 256 | 5.73 | **8.00** | +39.6% | 195 | 822 | 4.2× |
+| http_headers | 512 | 5.85 | **8.29** | +41.7% | 99 | 418 | 4.2× |
+| mqtt_messages | 64 | 4.05 | 4.57 | +12.9% | 1047 | 1947 | 1.9× |
+| mqtt_messages | 128 | 4.24 | 4.87 | +14.8% | 468 | 958 | 2.0× |
+| mqtt_messages | 256 | 4.35 | 5.04 | +16.0% | 220 | 511 | 2.3× |
+| mqtt_messages | 512 | 4.40 | 5.13 | +16.5% | 119 | 254 | 2.1× |
+| log_lines | 64 | 3.15 | 3.40 | +7.9% | 1065 | 1899 | 1.8× |
+| log_lines | 512 | 3.37 | 3.70 | +9.8% | 139 | 306 | 2.2× |
+| iot_packets | 64..512 | 1.30 | 1.30 | +0.0% | — | — | ~1.0× |
+
+### Cold-start / 메시지당 지연 (64B)
+
+base/land b/s 의 역수 = 메시지당 인코딩 지연. 64B: http 1.26ms → **0.35ms**, mqtt 0.96ms → **0.51ms**.
+mmap prior 로드는 즉시(`docs/mmap_prior.md`)라 cold-start 는 사실상 첫 메시지 지연이다.
+
+### Message-level random access (`bcb-blockbench --random`)
+
+각 메시지가 prior 로 **독립** 압축되므로, offset index 만 있으면 임의 메시지를 다른 메시지
+디코드 없이 standalone 복원한다. 64B 세트에서 임의 블록 2000개 standalone 복원 — 전부 정확,
+위치 무관: http 332µs, mqtt 495µs, syslog 513µs, iot 737µs / block.
+
+> **한계(정직)**: **sub-message** random access 는 불가하다. range coder 는 순차적이라 메시지 내
+> N번째 바이트는 0..N−1 을 먼저 디코드해야 얻는다. landmark 도 이를 바꾸지 않는다. random access 는
+> **메시지 단위**에서만 성립한다(각 메시지가 독립 압축이라 가능).
+
+### 원 기획 추정 vs 실측 (정직하게)
+
+| 항목 | 원 기획 추정 | 실측 |
+|---|---|---|
+| MQTT 64B 압축비 | 4.03× → **6~8× (+50~98%)** | 4.05× → **4.57× (+12.9%)** — 추정 과대 |
+| HTTP 압축비 | (—) | **+30~42%** (landmark 의 진짜 강점) |
+| throughput(속도) | 30→50~70 KB/s | hit 시 **1.8~4.2× 가속** (시나리오별) |
+| 64B 메시지 지연 | 1.5ms → 0.65~0.86ms | http 1.26→**0.35ms**, mqtt 0.96→0.51ms (부합) |
+| IoT | (—) | **+0%** (coverage 0) |
+
+**결론**: landmark 는 **HTTP 류 텍스트 헤더에서 +30~42% & ~4× 속도**로 강력하고, mqtt/syslog 는
++8~16%, **IoT(고엔트로피 binary)는 무효**. 압축비 이득은 시나리오 의존이며 원 기획의 +50~98% 는
+재현되지 않는다(HTTP 만 +42%까지 근접). 속도·지연 개선은 대체로 부합하거나 상회. 전부 무손실.

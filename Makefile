@@ -39,7 +39,7 @@ MSG_SIZES ?= 64,128,256,512,1024,2048,4096
 MSG_BYTES ?= 400000
 MSG_SAMPLES ?= 24
 
-.PHONY: all test bench clean msgbench msgbench-md msgbench-check prior prior-equiv prior-rss hpack hpack-docs landmark landmark-verify
+.PHONY: all test bench clean msgbench msgbench-md msgbench-check prior prior-equiv prior-rss hpack hpack-docs landmark landmark-verify landmark-bench landmark-bench-docs
 
 all: $(BUILD)/bcb-cli $(BUILD)/bcb-bench
 
@@ -188,6 +188,14 @@ landmark-verify: $(BUILD)/bcb-prior-build $(BUILD)/bcb-blockbench $(addprefix $(
 	  printf "%-15s lm:   " $$s; ./$(BUILD)/bcb-blockbench --prior $(BUILD)/$$s.lm.prior   --blocks $$B >/dev/null 2>/tmp/lm_lm;   cat /tmp/lm_lm; \
 	  grep -q 'lossless=yes' /tmp/lm_lm || fail=1; \
 	done; [ $$fail -eq 0 ] || { echo "LANDMARK VERIFY FAILED (lossless)"; exit 1; }
+
+# PR-3: base vs landmark 벤치 (압축비·처리량·random access) across sizes
+landmark-bench: $(BUILD)/bcb-prior-build $(BUILD)/bcb-blockbench $(addprefix $(BUILD)/corpus_,$(addsuffix .bin,$(LM_VERIFY_SCN)))
+	python3 tools/landmark_bench.py --build $(BUILD) --train $(MSG_TRAIN) --k $(LM_K) --n $(LM_N)
+
+landmark-bench-docs: $(BUILD)/bcb-prior-build $(BUILD)/bcb-blockbench $(addprefix $(BUILD)/corpus_,$(addsuffix .bin,$(LM_VERIFY_SCN)))
+	python3 tools/landmark_bench.py --build $(BUILD) --train $(MSG_TRAIN) --k $(LM_K) --n $(LM_N) \
+	  --write-docs docs/landmark.md
 
 # ── 작은 메시지 벤치마크 ─────────────────────────────────
 $(BUILD)/bcb-msgbench: tools/bcb-msgbench.c $(V0_SRC) $(V3_SRC) | $(BUILD)
