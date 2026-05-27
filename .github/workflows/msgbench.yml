@@ -31,5 +31,8 @@ jobs:
       - name: structural codec round-trip lossless (binary scenarios)
         run: make structural-verify
 
-      - name: public library API (include/bcb.h) round-trip + error paths
+      - name: public library API (include/bcb.h) round-trip + corruption detection
         run: make api-test
+
+      - name: multi-thread concurrent encode/decode lossless (thread-safety)
+        run: make threads-test

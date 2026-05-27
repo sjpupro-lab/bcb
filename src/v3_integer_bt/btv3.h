@@ -20,6 +20,26 @@
 
 void bt_v3_init(void);
 void bt_v3_free(void);
+
+/* ── 스레드 안전 reader (de-globalized read path) ──────────
+ * 읽기 전용 prior 데이터(pool/ctx/bloom, mmap 공유)를 가리키고, 가변 상태(window)는
+ * 인스턴스마다 따로 가진다. distribution_r 은 전역을 안 쓰므로(LUT 만 read-only 공유)
+ * 서로 다른 reader 를 여러 스레드가 동시에 써도 안전하다. */
+#define BCB_BT_MAX_DEPTH 24
+typedef struct {
+    const void *pool;        /* BtEntry[]  (read-only) */
+    const void *ctx_pool;    /* CtxEntry[] (read-only) */
+    const int  *ctx_slot;    /* (read-only) */
+    const unsigned char *bloom;
+    unsigned long ctx_mask;
+    unsigned char window[BCB_BT_MAX_DEPTH];   /* 가변, per-instance */
+    int win_len;
+} BtV3Reader;
+
+void bt_v3_ensure_luts(void);                 /* LUT 1회 생성 (스레드 생성 전 호출) */
+void bt_v3_reader_reset_window(BtV3Reader *r);
+void bt_v3_reader_push(BtV3Reader *r, unsigned char b);   /* window 전진 (frozen) */
+void bt_v3_distribution_r(const BtV3Reader *r, unsigned int *cum, unsigned int scale);
 void bt_v3_train(unsigned char b);
 void bt_v3_distribution(unsigned int *cum, unsigned int scale);
 unsigned long bt_v3_entries(void);

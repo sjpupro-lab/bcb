@@ -330,33 +330,52 @@ int bt_v3_ctx_at(unsigned long i, unsigned char *ctx_out, int *len_out,
  *   pass A — 활성 context 수집 + log2_w 최대값(max_log2) 탐색
  *   pass B — w=EXP2(log2_w−max) 로 base(미관측)+delta(관측) 누적 → byte별 prob_lv
  * 레벨 가중 결합 → 정규화·alpha-blend·scale 양자화. */
-void bt_v3_distribution(unsigned int *cum_out, unsigned int scale) {
-    static int64_t probs[256];   /* Q28 */
+/* reader 용 lookup (전역 미사용) */
+static inline const CtxEntry* ctx_find_rd(const BtV3Reader *r, const unsigned char *ctx, int cl, unsigned int ch){
+    const CtxEntry *cpool = (const CtxEntry*)r->ctx_pool;
+    unsigned int h = ch & r->ctx_mask;
+    for(;;){
+        int s = r->ctx_slot[h];
+        if(s < 0) return NULL;
+        const CtxEntry *e = &cpool[s];
+        if(e->ctx_len==cl && memcmp(e->ctx,ctx,cl)==0) return e;
+        h = (h+1) & r->ctx_mask;
+    }
+}
+static inline int bloom_chk_rd(const unsigned char *bloom, const unsigned char *ctx, int cl){
+    unsigned int ch=fnv(ctx,cl);
+    if(!(bloom[(ch&BLOOM_MASK)>>3]&(1<<(ch&7))))return 0;
+    unsigned int ch2=ch*2654435761u;
+    if(!(bloom[(ch2&BLOOM_MASK)>>3]&(1<<(ch2&7))))return 0;
+    return 1;
+}
 
-    if (g_win_len == 0) {
+/* 정수 분포 계산 (canonical). 전역 미사용 — reader 로부터만 읽는다. 스택 로컬(thread-safe). */
+void bt_v3_distribution_r(const BtV3Reader *r, unsigned int *cum_out, unsigned int scale) {
+    int64_t probs[256];
+    const unsigned char *win = r->window; int wl = r->win_len;
+    const BtEntry *pool = (const BtEntry*)r->pool;
+
+    if (wl == 0) {
         for (int b=0;b<256;b++) probs[b] = PSCALE/256;
     } else {
         int64_t ws[256], wt[256];
         for (int b=0;b<256;b++){ ws[b]=0; wt[b]=0; }
-
-        /* 활성 context 캐시 + context별 byte 빈도표 (레벨 내) */
-        static int      act_n[BT_MAX_DEPTH];
-        static unsigned act_total[BT_MAX_DEPTH];
-        static int64_t  act_l0[BT_MAX_DEPTH], act_p0[BT_MAX_DEPTH];
-        static unsigned act_freq[BT_MAX_DEPTH][256];
+        int      act_n[BT_MAX_DEPTH];
+        unsigned act_total[BT_MAX_DEPTH];
+        int64_t  act_l0[BT_MAX_DEPTH], act_p0[BT_MAX_DEPTH];
+        unsigned act_freq[BT_MAX_DEPTH][256];     /* ~24KB stack, thread-local */
 
         for (int lv=0; lv<BT_LEVELS_V4; lv++) {
             int dmin=LEVELS[lv].dmin, dmax=LEVELS[lv].dmax;
-            int start = g_win_len<dmax?g_win_len:dmax;
+            int start = wl<dmax?wl:dmax;
             int nact=0;
-
-            /* 활성 context 수집 + 빈도표 구축 */
             for (int n=start; n>=dmin; n--) {
-                if (n>g_win_len) continue;
-                const unsigned char *ctx = g_window + (g_win_len-n);
-                if (!bloom_chk(ctx,n)) continue;
+                if (n>wl) continue;
+                const unsigned char *ctx = win + (wl-n);
+                if (!bloom_chk_rd(r->bloom,ctx,n)) continue;
                 unsigned int ch = fnv(ctx,n);
-                CtxEntry *cc = ctx_find_h(ctx,n,ch);
+                const CtxEntry *cc = ctx_find_rd(r,ctx,n,ch);
                 if (!cc || cc->total_freq==0) continue;
                 unsigned total = cc->total_freq;
                 int a = nact++;
@@ -365,12 +384,10 @@ void bt_v3_distribution(unsigned int *cum_out, unsigned int scale) {
                 act_l0[a] = (int64_t)EXP_LOG2[n] + CONF_LOG2[idx0];
                 act_p0[a] = PSCALE/(int64_t)(total+256);
                 memset(act_freq[a], 0, 256*sizeof(unsigned));
-                for (int idx=cc->first_entry; idx>=0; idx=g_pool[idx].ctx_next)
-                    act_freq[a][g_pool[idx].next_byte] = g_pool[idx].freq;
+                for (int idx=cc->first_entry; idx>=0; idx=pool[idx].ctx_next)
+                    act_freq[a][pool[idx].next_byte] = pool[idx].freq;
             }
             if (nact==0) continue;
-
-            /* byte별로 자기 context들 중 max 로 정규화(scale-invariant, underflow 방지) */
             int W = LEVELS[lv].wint;
             for (int b=0;b<256;b++) {
                 int64_t tl[BT_MAX_DEPTH], tp[BT_MAX_DEPTH];
@@ -383,9 +400,7 @@ void bt_v3_distribution(unsigned int *cum_out, unsigned int scale) {
                         int ii = (int)(((int64_t)f*PRES)/total); if(ii>=PRES)ii=PRES-1;
                         l = (int64_t)EXP_LOG2[act_n[a]] + CONF_LOG2[ii];
                         p = ((int64_t)f*PSCALE)/total;
-                    } else {
-                        l = act_l0[a]; p = act_p0[a];
-                    }
+                    } else { l = act_l0[a]; p = act_p0[a]; }
                     tl[a]=l; tp[a]=p; if(l>max_l) max_l=l;
                 }
                 int64_t num=0, den=0;
@@ -393,11 +408,7 @@ void bt_v3_distribution(unsigned int *cum_out, unsigned int scale) {
                     int64_t w = exp2_w(tl[a] - max_l);
                     num += w*tp[a]; den += w;
                 }
-                if (den>0) {
-                    int64_t prob_lv = num / den;             /* Q PBITS */
-                    ws[b] += (int64_t)W * prob_lv;
-                    wt[b] += (int64_t)W;
-                }
+                if (den>0) { int64_t prob_lv = num/den; ws[b] += (int64_t)W*prob_lv; wt[b] += (int64_t)W; }
             }
         }
         for (int b=0;b<256;b++) {
@@ -407,12 +418,10 @@ void bt_v3_distribution(unsigned int *cum_out, unsigned int scale) {
             probs[b]=prob;
         }
     }
-
-    /* 정규화 + alpha-blend(0.95/0.05) + scale 양자화 (정수) */
     int64_t s = 0;
     for (int b=0;b<256;b++) s += probs[b];
     if (s <= 0) { unsigned int w=scale/256; for(int b=0;b<256;b++)cum_out[b]=b*w; cum_out[256]=scale; return; }
-    int64_t base_w = (50*(int64_t)scale)/(1000*256);   /* alpha·scale/256 */
+    int64_t base_w = (50*(int64_t)scale)/(1000*256);
     unsigned int acc = 0;
     for (int b=0;b<256;b++) {
         int64_t w = (950*(int64_t)scale*probs[b])/(1000*s) + base_w;
@@ -420,6 +429,23 @@ void bt_v3_distribution(unsigned int *cum_out, unsigned int scale) {
         cum_out[b] = acc; acc += (unsigned int)w;
     }
     cum_out[256] = acc;
+}
+
+/* 전역 wrapper: 현재 globals 로 reader 를 만들어 canonical 경로로 위임 (bit-identical). */
+void bt_v3_distribution(unsigned int *cum_out, unsigned int scale) {
+    BtV3Reader r;
+    r.pool=g_pool; r.ctx_pool=g_ctx_pool; r.ctx_slot=g_ctx_slot;
+    r.bloom=g_bloom; r.ctx_mask=g_ctx_mask;
+    int wl = g_win_len > BT_MAX_DEPTH ? BT_MAX_DEPTH : g_win_len;
+    memcpy(r.window, g_window, (size_t)wl); r.win_len = wl;
+    bt_v3_distribution_r(&r, cum_out, scale);
+}
+
+void bt_v3_ensure_luts(void){ if(!CONF_LOG2 || !EXP2_FRAC) build_luts(); }
+void bt_v3_reader_reset_window(BtV3Reader *r){ memset(r->window,0,sizeof(r->window)); r->win_len=0; }
+void bt_v3_reader_push(BtV3Reader *r, unsigned char b){
+    if(r->win_len<BT_MAX_DEPTH) r->window[r->win_len++]=b;
+    else { memmove(r->window, r->window+1, BT_MAX_DEPTH-1); r->window[BT_MAX_DEPTH-1]=b; }
 }
 unsigned long bt_v3_entries(void){return g_pool_used;}
 

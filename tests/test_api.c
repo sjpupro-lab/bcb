@@ -78,6 +78,30 @@ int main(int argc, char **argv) {
     CHECK(bcb_compress(NULL, msg, mlen, comp, cap) == BCB_ERR_INVALID_PRIOR, "null prior -> INVALID_PRIOR");
     CHECK(bcb_prior_open("/no/such/file.bcb-prior") == NULL, "open missing file -> NULL");
 
+    /* corruption detection (CRC32): 손상 시 BCB_ERR_CORRUPTED 를 정확히 반환해야 한다 */
+    {
+        BcbPrior *p2 = bcb_prior_open(argv[1]);
+        ssize_t cc = bcb_compress(p2, msg, mlen, comp, cap);   /* crc on (기본) */
+        /* 컨테이너 헤더 끝(=payload 시작) 계산: tag(1) + varint(mlen) + crc(4) */
+        int vlen = 1; for (uint64_t t = (uint64_t)mlen >> 7; t; t >>= 7) vlen++;
+        size_t crc_off = 1 + (size_t)vlen, payload_off = crc_off + 4;
+
+        uint8_t save = comp[crc_off]; comp[crc_off] ^= 0xFF;   /* CRC 필드 손상 */
+        CHECK(bcb_decompress(p2, comp, (size_t)cc, dec, mlen) == BCB_ERR_CORRUPTED,
+              "corrupted CRC field -> BCB_ERR_CORRUPTED");
+        comp[crc_off] = save;
+
+        if ((size_t)cc > payload_off) {
+            save = comp[payload_off]; comp[payload_off] ^= 0xFF;   /* payload 첫 바이트 손상 */
+            ssize_t r = bcb_decompress(p2, comp, (size_t)cc, dec, mlen);
+            CHECK(r == BCB_ERR_CORRUPTED, "corrupted payload -> BCB_ERR_CORRUPTED");
+            comp[payload_off] = save;
+        }
+        ssize_t ok = bcb_decompress(p2, comp, (size_t)cc, dec, mlen);
+        CHECK(ok == (ssize_t)mlen && memcmp(dec, msg, mlen) == 0, "clean input still decodes (CRC ok)");
+        bcb_prior_close(p2);
+    }
+
     free(msg); free(comp); free(dec);
     printf("%s (%d failure%s)\n", fails ? "FAILED" : "PASSED", fails, fails == 1 ? "" : "s");
     return fails ? 1 : 0;

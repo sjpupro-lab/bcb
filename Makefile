@@ -43,7 +43,7 @@ MSG_SIZES ?= 64,128,256,512,1024,2048,4096
 MSG_BYTES ?= 400000
 MSG_SAMPLES ?= 24
 
-.PHONY: all test bench clean msgbench msgbench-md msgbench-landmark msgbench-check prior prior-equiv prior-rss hpack hpack-docs landmark landmark-verify landmark-bench landmark-bench-docs structbench structural-bench structural-verify api-test
+.PHONY: all test bench clean msgbench msgbench-md msgbench-landmark msgbench-check prior prior-equiv prior-rss hpack hpack-docs landmark landmark-verify landmark-bench landmark-bench-docs structbench structural-bench structural-verify api-test threads-test
 
 all: $(BUILD)/bcb-cli $(BUILD)/bcb-bench
 
@@ -214,6 +214,16 @@ api-test: $(BUILD)/test_api $(BUILD)/bcb-prior-build $(BUILD)/corpus_mqtt_messag
 	@./$(BUILD)/bcb-prior-build $(BUILD)/corpus_mqtt_messages.bin $(BUILD)/api.prior --train-size 50000 --landmark-k 256 >/dev/null 2>&1
 	@tail -c 200 $(BUILD)/corpus_mqtt_messages.bin > $(BUILD)/api_msg.bin
 	./$(BUILD)/test_api $(BUILD)/api.prior $(BUILD)/api_msg.bin
+
+# 멀티스레드 동시 encode/decode 무손실 (de-globalize 검증). landmark + structural prior 둘 다.
+$(BUILD)/test_threads: tests/test_threads.c $(BUILD)/libbcb.a | $(BUILD)
+	$(CC) $(CFLAGS) $(V6_INC) -o $@ tests/test_threads.c $(BUILD)/libbcb.a $(LDLIBS) -lpthread
+
+threads-test: $(BUILD)/test_threads $(BUILD)/bcb-prior-build $(BUILD)/corpus_mqtt_messages.bin $(BUILD)/corpus_binary_record.bin
+	@./$(BUILD)/bcb-prior-build $(BUILD)/corpus_mqtt_messages.bin $(BUILD)/thr_lm.prior --train-size 50000 --landmark-k 256 >/dev/null 2>&1
+	@./$(BUILD)/bcb-prior-build $(BUILD)/corpus_binary_record.bin $(BUILD)/thr_sc.prior --train-size 49984 --schema-record-size 32 >/dev/null 2>&1
+	@echo "[landmark prior]"; ./$(BUILD)/test_threads $(BUILD)/thr_lm.prior $(BUILD)/corpus_mqtt_messages.bin 8 4000
+	@echo "[structural prior]"; ./$(BUILD)/test_threads $(BUILD)/thr_sc.prior $(BUILD)/corpus_binary_record.bin 8 4000
 
 # CI 용 빠른 structural round-trip 무손실 (작은 train)
 structural-verify: $(BUILD)/bcb-prior-build $(BUILD)/bcb-blockbench
