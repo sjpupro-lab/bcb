@@ -140,6 +140,27 @@ build/bcb-cli decode out.bcb msg.out --prior prior.bcb-prior
 make prior            # 동등성(in-memory=mmap 비트 동일) + RSS·처리량 측정
 ```
 
+### 라이브러리 / Library (`include/bcb.h`)
+
+BCB 를 컴포넌트로 임베드하는 안정 C API (v1.0). `build/libbcb.a` + `include/bcb.h` 만 링크.
+
+```sh
+make build/libbcb.a
+cc -Iinclude my_app.c build/libbcb.a -lm -o my_app
+make api-test            # 공개 API round-trip + 에러 경로 검증
+```
+
+```c
+#include "bcb.h"
+BcbPrior *p = bcb_prior_open("sensors.bcb-prior");          /* 또는 _from_memory */
+ssize_t n = bcb_compress(p, msg, msg_len, out, sizeof out);  /* 자기 기술적 컨테이너 */
+ssize_t m = bcb_decompress(p, out, (size_t)n, back, sizeof back);  /* m == msg_len, 무손실 */
+bcb_prior_close(p);
+```
+
+one-shot + encoder/decoder 핸들 + 에러 코드 + semver. 단일 전역 코덱 상태(동시 사용은 외부
+직렬화 필요). 전체 레퍼런스·계약·한계: `docs/api.md`.
+
 레거시 텍스트 벤치(gzip/bzip2/xz vs 4KB 책 발췌)·v0~v4 개발 기록: `make bench`, `docs/benchmarks_legacy.md`.
 
 ---
@@ -153,7 +174,8 @@ make prior            # 동등성(in-memory=mmap 비트 동일) + RSS·처리량
 | v2 (시계계층) | carry-tick 좌표를 BT context 에 mix | **폐기** (fragmentation) |
 | **v3** `src/v3_integer_bt` | caching → open addressing → 정수 hot path → libm 제거 + MCU | v0 대비 −0.13%, ~28× 가속, MCU 3.56MB |
 | **v4** `src/v4_aux_channel` | 거시 통계 보조채널 (distribution blend) | combo +2.94%, 무손실 |
-| **v5** `src/v5_mmap_prior` | prior 직렬화 + mmap 로드 (frozen) + landmark prior index | 비트 동일·무손실, 즉시 시작, HTTP +30~42% & ~4× |
+| **v5** `src/v5_mmap_prior` | prior 직렬화 + mmap 로드 (frozen) + landmark + structural schema | 비트 동일·무손실, HTTP +30~42%, binary +41~286% |
+| **v6** `src/v6_public` `include/bcb.h` | 안정 공개 라이브러리 API v1.0 | one-shot/streaming, libbcb.a |
 
 설계·측정 기록: `docs/theory.md`, `docs/benchmarks.md`, `docs/benchmarks_legacy.md`, `docs/mcu.md`, `docs/mmap_prior.md`.
 
@@ -166,11 +188,13 @@ src/v0_baseline/        range coder + n-gram BT (reference)
 src/v1_symmetric_dist/  분포 합=1 정규화
 src/v3_integer_bt/      정수 BT (caching, open addressing, log-domain, MCU)
 src/v4_aux_channel/     보조채널 (distribution blend)
-src/v5_mmap_prior/      prior 직렬화 + mmap 로드 (frozen)
+src/v5_mmap_prior/      prior 직렬화 + mmap 로드 (frozen) + landmark + structural schema
+src/v6_public/          공개 라이브러리 구현 (bcb_api.c)
+include/bcb.h           공개 API v1.0 (stable)
 tests/scenarios/        작은 메시지 generator (HTTP/IoT/MQTT/log/RPC, http2, binary_record/modbus/canbus) + 회귀 baseline
 tests/corpus/           Gutenberg 4권 (레거시 텍스트 벤치)
 tools/                  bcb-cli, bcb-bench, bcb-msgbench, bcb-meminfo, bcb-prior-build, bcb-prior-test, bcb-blockbench, bcb-landmark, bcb-structbench, bcb_vs_hpack.py, landmark_bench.py, structural_bench.py
-docs/                   benchmarks(작은 메시지), use_cases, theory, mcu, benchmarks_legacy, mmap_prior, hpack_comparison, landmark, structural_landmark, structural
+docs/                   benchmarks(작은 메시지), use_cases, theory, mcu, benchmarks_legacy, mmap_prior, hpack_comparison, landmark, structural_landmark, structural, api
 ```
 
 ---

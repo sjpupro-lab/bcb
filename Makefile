@@ -26,6 +26,10 @@ V5_DIR  := src/v5_mmap_prior
 V5_INC  := -I$(V5_DIR)
 V5_SRC  := $(V5_DIR)/bcb_prior.c
 
+V6_DIR  := src/v6_public
+V6_INC  := -Iinclude
+V6_SRC  := $(V6_DIR)/bcb_api.c
+
 BUILD   := build
 CORPUS  := tests/corpus/pride_and_prejudice.txt
 
@@ -39,7 +43,7 @@ MSG_SIZES ?= 64,128,256,512,1024,2048,4096
 MSG_BYTES ?= 400000
 MSG_SAMPLES ?= 24
 
-.PHONY: all test bench clean msgbench msgbench-md msgbench-landmark msgbench-check prior prior-equiv prior-rss hpack hpack-docs landmark landmark-verify landmark-bench landmark-bench-docs structbench structural-bench structural-verify
+.PHONY: all test bench clean msgbench msgbench-md msgbench-landmark msgbench-check prior prior-equiv prior-rss hpack hpack-docs landmark landmark-verify landmark-bench landmark-bench-docs structbench structural-bench structural-verify api-test
 
 all: $(BUILD)/bcb-cli $(BUILD)/bcb-bench
 
@@ -191,6 +195,25 @@ $(BUILD)/corpus_iot_single.bin: $(SCN)/iot_packets.py | $(BUILD)
 # 실제 코딩 바이트 — structural codec (base vs schema, round-trip 무손실)
 structural-bench: $(BUILD)/bcb-prior-build $(BUILD)/bcb-blockbench
 	python3 tools/structural_bench.py --build $(BUILD) --recs-per-msg 100
+
+# ── 공개 라이브러리 (include/bcb.h) — v6 Phase 2 ──────────
+# 정적 라이브러리. 공개 API + 내부 코덱을 하나로 묶는다.
+$(BUILD)/libbcb.a: $(V6_SRC) $(V0_SRC) $(V3_SRC) $(V5_SRC) | $(BUILD)
+	$(CC) $(CFLAGS) $(V6_INC) $(V0_INC) $(V3_INC) $(V5_INC) -c $(V6_SRC) -o $(BUILD)/bcb_api.o
+	$(CC) $(CFLAGS) $(V0_INC) -c $(V0_DIR)/ce_compress.c -o $(BUILD)/ce_compress.o
+	$(CC) $(CFLAGS) $(V0_INC) -c $(V0_DIR)/bt_model.c -o $(BUILD)/bt_model.o
+	$(CC) $(CFLAGS) $(V3_INC) $(V0_INC) -c $(V3_DIR)/btv3.c -o $(BUILD)/btv3.o
+	$(CC) $(CFLAGS) $(V5_INC) $(V3_INC) $(V0_INC) -c $(V5_DIR)/bcb_prior.c -o $(BUILD)/bcb_prior.o
+	ar rcs $@ $(BUILD)/bcb_api.o $(BUILD)/ce_compress.o $(BUILD)/bt_model.o $(BUILD)/btv3.o $(BUILD)/bcb_prior.o
+
+# 공개 API 테스트 (libbcb 만 링크, 내부 헤더 미사용)
+$(BUILD)/test_api: tests/test_api.c $(BUILD)/libbcb.a | $(BUILD)
+	$(CC) $(CFLAGS) $(V6_INC) -o $@ tests/test_api.c $(BUILD)/libbcb.a $(LDLIBS)
+
+api-test: $(BUILD)/test_api $(BUILD)/bcb-prior-build $(BUILD)/corpus_mqtt_messages.bin
+	@./$(BUILD)/bcb-prior-build $(BUILD)/corpus_mqtt_messages.bin $(BUILD)/api.prior --train-size 50000 --landmark-k 256 >/dev/null 2>&1
+	@tail -c 200 $(BUILD)/corpus_mqtt_messages.bin > $(BUILD)/api_msg.bin
+	./$(BUILD)/test_api $(BUILD)/api.prior $(BUILD)/api_msg.bin
 
 # CI 용 빠른 structural round-trip 무손실 (작은 train)
 structural-verify: $(BUILD)/bcb-prior-build $(BUILD)/bcb-blockbench

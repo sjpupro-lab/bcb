@@ -43,8 +43,9 @@ typedef struct {
 } BcbpHeader;
 
 struct BcbPrior {
-    void  *map;
+    void  *map;          /* mmap 영역 (mmap 로드 시), 아니면 NULL */
     size_t map_len;
+    void  *owned_buf;    /* from_memory 가 복사·소유한 버퍼, 아니면 NULL */
     BtV3Snapshot snap;
     /* landmark */
     int             lm_n;
@@ -255,6 +256,33 @@ static int lm_lookup(const BcbPrior *p, const unsigned char *ctx) {
     }
 }
 
+/* base(>= len 바이트, 읽기전용 prior 이미지)에서 BcbPrior 의 포인터들을 채운다.
+ * base 메모리는 호출자(또는 mmap/owned_buf)가 소유. 0 ok / -1 형식 오류(magic/version/size). */
+static int prior_parse(BcbPrior *p, const void *base, size_t len) {
+    if (len < sizeof(BcbpHeader)) return -1;
+    const BcbpHeader *h = (const BcbpHeader *)base;
+    if (memcmp(h->magic, BCBP_MAGIC, 4) != 0) return -1;
+    if (h->version != BCBP_VERSION) return -1;
+    if (h->file_size > len) return -1;
+    const char *m = (const char *)base;
+    p->snap.pool        = m + h->off_pool;     p->snap.pool_used  = h->pool_used;
+    p->snap.ctx_pool    = m + h->off_ctx_pool; p->snap.ctx_used   = h->ctx_used;
+    p->snap.ctx_slot    = m + h->off_ctx_slot; p->snap.ctx_nslots = h->ctx_nslots;
+    p->snap.bloom       = m + h->off_bloom;    p->snap.bloom_bytes= h->bloom_bytes;
+    p->snap.window      = (const unsigned char *)m + h->off_window; p->snap.win_len = h->win_len;
+    p->snap.bt_entry_sz = h->bt_entry_sz; p->snap.ctx_entry_sz = h->ctx_entry_sz;
+    p->snap.bt_max_depth = h->bt_max_depth; p->snap.bloom_bits = (unsigned)h->bloom_bits;
+    p->snap.pres = h->pres;
+    p->lm_n = (int)h->lm_n; p->lm_k = (unsigned)h->lm_k;
+    p->lm_ctx = (const unsigned char *)m + h->off_lm_ctx;
+    p->lm_cum = (const uint16_t *)(m + h->off_lm_cum);
+    lm_build_index(p);
+    p->schema_rec = (int)h->schema_rec; p->schema_pos = (int)h->schema_pos;
+    p->schema_modes = (const unsigned char *)m + h->off_schema_modes;
+    p->schema_cum   = (const uint16_t *)(m + h->off_schema_cum);
+    return 0;
+}
+
 BcbPrior *bcb_prior_mmap(const char *path) {
     int fd = open(path, O_RDONLY);
     if (fd < 0) return NULL;
@@ -265,39 +293,34 @@ BcbPrior *bcb_prior_mmap(const char *path) {
     close(fd);
     if (map == MAP_FAILED) return NULL;
     madvise(map, len, MADV_RANDOM);
-
-    const BcbpHeader *h = (const BcbpHeader *)map;
-    if (memcmp(h->magic, BCBP_MAGIC, 4) != 0 || h->version != BCBP_VERSION ||
-        h->file_size > len) { munmap(map, len); return NULL; }
-
     BcbPrior *p = (BcbPrior *)calloc(1, sizeof *p);
-    if (!p) { munmap(map, len); return NULL; }
+    if (!p || prior_parse(p, map, len) != 0) { free(p); munmap(map, len); return NULL; }
     p->map = map; p->map_len = len;
-    p->snap.pool        = (const char *)map + h->off_pool;     p->snap.pool_used  = h->pool_used;
-    p->snap.ctx_pool    = (const char *)map + h->off_ctx_pool; p->snap.ctx_used   = h->ctx_used;
-    p->snap.ctx_slot    = (const char *)map + h->off_ctx_slot; p->snap.ctx_nslots = h->ctx_nslots;
-    p->snap.bloom       = (const char *)map + h->off_bloom;    p->snap.bloom_bytes= h->bloom_bytes;
-    p->snap.window      = (const unsigned char *)map + h->off_window; p->snap.win_len = h->win_len;
-    p->snap.bt_entry_sz = h->bt_entry_sz; p->snap.ctx_entry_sz = h->ctx_entry_sz;
-    p->snap.bt_max_depth = h->bt_max_depth; p->snap.bloom_bits = (unsigned)h->bloom_bits;
-    p->snap.pres = h->pres;
-    p->lm_n = (int)h->lm_n; p->lm_k = (unsigned)h->lm_k;
-    p->lm_ctx = (const unsigned char *)map + h->off_lm_ctx;
-    p->lm_cum = (const uint16_t *)((const char *)map + h->off_lm_cum);
-    lm_build_index(p);
-    p->schema_rec = (int)h->schema_rec; p->schema_pos = (int)h->schema_pos;
-    p->schema_modes = (const unsigned char *)map + h->off_schema_modes;
-    p->schema_cum   = (const uint16_t *)((const char *)map + h->off_schema_cum);
+    return p;
+}
+
+/* 메모리 버퍼를 복사·소유해 prior 로드 (mmap 불가 환경/임베디드). */
+BcbPrior *bcb_prior_from_buffer(const void *data, size_t len) {
+    if (!data || len < sizeof(BcbpHeader)) return NULL;
+    void *buf = malloc(len);
+    if (!buf) return NULL;
+    memcpy(buf, data, len);
+    BcbPrior *p = (BcbPrior *)calloc(1, sizeof *p);
+    if (!p || prior_parse(p, buf, len) != 0) { free(p); free(buf); return NULL; }
+    p->owned_buf = buf;
+    p->map_len = len;          /* footprint 보고용 (munmap 안 함) */
     return p;
 }
 
 int bcb_prior_record_size(const BcbPrior *p) { return p ? p->schema_rec : 0; }
+size_t bcb_prior_map_len(const BcbPrior *p) { return p ? p->map_len : 0; }
 
 void bcb_prior_close(BcbPrior *p) {
     if (!p) return;
     bt_v3_detach();
     free(p->lm_slot);
     if (p->map && p->map != MAP_FAILED) munmap(p->map, p->map_len);
+    free(p->owned_buf);
     free(p);
 }
 

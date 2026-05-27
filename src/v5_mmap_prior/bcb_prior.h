@@ -19,7 +19,10 @@
 #include "ce_compress.h"
 #include <stdint.h>
 
+#ifndef BCB_PRIOR_TYPE_DEFINED
+#define BCB_PRIOR_TYPE_DEFINED
 typedef struct BcbPrior BcbPrior;
+#endif
 
 /* 다음 bcb_prior_save 에 포함할 landmark 표 등록 (NULL/0 이면 landmark 없음).
  *   n   : context 길이 (bytes)
@@ -45,6 +48,12 @@ int bcb_prior_save_with_schema(const char *path, const unsigned char *corpus,
 
 /* prior 파일을 mmap 으로 로드 (RAM 에 거의 복사 안 함). 실패 시 NULL. */
 BcbPrior *bcb_prior_mmap(const char *path);
+
+/* 메모리 버퍼를 복사·소유해 prior 로드. 실패 시 NULL. */
+BcbPrior *bcb_prior_from_buffer(const void *data, size_t len);
+
+/* mmap 된 prior 의 매핑 길이 (footprint 보고용; from_buffer 면 0). */
+size_t bcb_prior_map_len(const BcbPrior *p);
 
 /* mmap 해제 + 핸들 free. */
 void bcb_prior_close(BcbPrior *p);
