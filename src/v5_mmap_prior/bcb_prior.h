@@ -55,6 +55,10 @@ BcbPrior *bcb_prior_from_buffer(const void *data, size_t len);
 /* mmap 된 prior 의 매핑 길이 (footprint 보고용; from_buffer 면 0). */
 size_t bcb_prior_map_len(const BcbPrior *p);
 
+/* prior 고유 id (SHA-256(prior 이미지) 앞 16바이트) 포인터. */
+#define BCB_PRIOR_ID_LEN 16
+const unsigned char *bcb_prior_id_bytes(const BcbPrior *p);
+
 /* mmap 해제 + 핸들 free. */
 void bcb_prior_close(BcbPrior *p);
 
@@ -78,6 +82,7 @@ BcbCodec *bcb_codec_new(BcbPrior *p);     /* prior 의 읽기 전용 데이터�
 void      bcb_codec_free(BcbCodec *c);
 void      bcb_codec_begin(BcbCodec *c);   /* 메시지 경계 리셋 */
 CecBT     bcb_codec_cec_bt(BcbCodec *c);  /* 이 codec 에 묶인 CecBT (전역 미사용) */
+const unsigned char *bcb_codec_prior_id(const BcbCodec *c);  /* codec 의 prior id (16B) */
 
 /* prior 가 record schema 를 가지면 record_size(>0), 없으면 0. */
 int bcb_prior_record_size(const BcbPrior *p);
