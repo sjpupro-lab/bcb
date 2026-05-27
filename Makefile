@@ -210,10 +210,11 @@ $(BUILD)/libbcb.a: $(V6_SRC) $(V0_SRC) $(V3_SRC) $(V5_SRC) | $(BUILD)
 $(BUILD)/test_api: tests/test_api.c $(BUILD)/libbcb.a | $(BUILD)
 	$(CC) $(CFLAGS) $(V6_INC) -o $@ tests/test_api.c $(BUILD)/libbcb.a $(LDLIBS)
 
-api-test: $(BUILD)/test_api $(BUILD)/bcb-prior-build $(BUILD)/corpus_mqtt_messages.bin
+api-test: $(BUILD)/test_api $(BUILD)/bcb-prior-build $(BUILD)/corpus_mqtt_messages.bin $(BUILD)/corpus_log_lines.bin
 	@./$(BUILD)/bcb-prior-build $(BUILD)/corpus_mqtt_messages.bin $(BUILD)/api.prior --train-size 50000 --landmark-k 256 >/dev/null 2>&1
+	@./$(BUILD)/bcb-prior-build $(BUILD)/corpus_log_lines.bin $(BUILD)/api2.prior --train-size 50000 --landmark-k 256 >/dev/null 2>&1
 	@tail -c 200 $(BUILD)/corpus_mqtt_messages.bin > $(BUILD)/api_msg.bin
-	./$(BUILD)/test_api $(BUILD)/api.prior $(BUILD)/api_msg.bin
+	./$(BUILD)/test_api $(BUILD)/api.prior $(BUILD)/api_msg.bin $(BUILD)/api2.prior
 
 # 멀티스레드 동시 encode/decode 무손실 (de-globalize 검증). landmark + structural prior 둘 다.
 $(BUILD)/test_threads: tests/test_threads.c $(BUILD)/libbcb.a | $(BUILD)

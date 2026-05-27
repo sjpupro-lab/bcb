@@ -2,7 +2,7 @@
  * Copyright (c) 2026 호시 <jahyag@gmail.com>
  * Licensed under the MIT License. See LICENSE.
  */
-/* bcb.h — BCB Public API v1.0 (stable).
+/* bcb.h — BCB Public API v0.2 (C API, semver).
  *
  * BCB 는 "공유 prior 를 가진 작은 메시지" 무손실 압축기다. 인코더와 디코더가 같은
  * 학습된 prior(.bcb-prior)를 공유하고, 각 메시지를 그 prior 기준으로 압축한다.
@@ -37,9 +37,12 @@ typedef enum {
     BCB_OK = 0,
     BCB_ERR_INVALID_PRIOR  = -1,   /* prior NULL / 열기 실패 */
     BCB_ERR_OUTPUT_TOO_SMALL = -2, /* 출력 버퍼 용량 부족 */
-    BCB_ERR_CORRUPTED      = -3,   /* 입력 컨테이너 손상 */
+    BCB_ERR_CORRUPTED      = -3,   /* 입력 컨테이너 손상 (CRC 불일치 포함) */
     BCB_ERR_VERSION        = -4,   /* prior 파일 포맷 버전 불일치 */
+    BCB_ERR_PRIOR_ID_MISMATCH = -5,/* 압축본의 prior id 가 디코딩 prior 와 불일치 */
 } BcbStatus;
+
+#define BCB_PRIOR_ID_LEN 16        /* prior id 길이 (SHA-256 앞 16바이트) */
 
 #ifndef BCB_PRIOR_TYPE_DEFINED
 #define BCB_PRIOR_TYPE_DEFINED
@@ -58,6 +61,13 @@ void      bcb_prior_close(BcbPrior *p);
 size_t    bcb_prior_memory_footprint(const BcbPrior *p);
 /* record schema 가 있으면 record_size(>0), 없으면 0. */
 int       bcb_prior_record_size(const BcbPrior *p);
+/* prior 의 고유 id (SHA-256(prior 이미지) 앞 16바이트). *out_len = BCB_PRIOR_ID_LEN.
+ * 같은 학습으로 만든 prior 는 같은 id. encode/decode 양쪽 prior 일치 확인용. */
+const uint8_t *bcb_prior_id(const BcbPrior *p, size_t *out_len);
+
+/* 입력 input_len 에 대해 출력 버퍼가 반드시 충분한 크기(상한). zstd/lz4 의 _bound 패턴.
+ * BCB 는 비압축성 입력에서 팽창할 수 있으므로(range coder 최악 ~14bit/byte) 보수적 상한. */
+size_t bcb_compress_bound(size_t input_len);
 
 /* ── One-shot (encoder/decoder 할당 없이) ─────────────────── */
 /* in[0..in_len) 를 out 으로 압축. 성공 시 출력 바이트수, 실패 시 음수 BcbStatus.
@@ -75,6 +85,9 @@ ssize_t     bcb_encode(BcbEncoder *e, const uint8_t *input, size_t input_len,
 /* 메시지마다 4바이트 CRC32 무결성 체크 on/off (기본 on). 작은 메시지에서 최대 압축비를
  * 원하면 off. 디코더는 컨테이너 태그로 자동 감지하므로 별도 설정 불필요. */
 void        bcb_encoder_set_checksum(BcbEncoder *e, int on);
+/* 압축본에 prior id(16B)를 박는다 (기본 off). on 이면 디코더가 prior 불일치를
+ * BCB_ERR_PRIOR_ID_MISMATCH 로 즉시 잡는다. 작은 메시지엔 16B 오버헤드 주의. */
+void        bcb_encoder_set_prior_id(BcbEncoder *e, int on);
 void        bcb_encoder_free(BcbEncoder *e);
 
 BcbDecoder *bcb_decoder_new(BcbPrior *p);
@@ -84,7 +97,7 @@ void        bcb_decoder_free(BcbDecoder *d);
 
 /* ── 잡 ──────────────────────────────────────────────────── */
 const char *bcb_strerror(BcbStatus s);   /* 에러 코드 → 사람이 읽는 문자열 */
-const char *bcb_version(void);            /* semver 문자열 "1.0.0" */
+const char *bcb_version(void);            /* semver 문자열 "0.2.0" */
 
 #ifdef __cplusplus
 }

@@ -44,6 +44,34 @@ int main(int argc, char **argv) {
     CHECK(dlen == (ssize_t)mlen && memcmp(dec, msg, mlen) == 0, "one-shot round-trip lossless");
     printf("  %zu -> %zd bytes (%.2fx)\n", mlen, clen, clen ? (double)mlen / clen : 0);
 
+    /* bcb_compress_bound: 실제 출력이 상한 이내 */
+    CHECK((size_t)clen <= bcb_compress_bound(mlen), "output within bcb_compress_bound");
+
+    /* prior id */
+    size_t idlen = 0; const uint8_t *id = bcb_prior_id(p, &idlen);
+    CHECK(id != NULL && idlen == BCB_PRIOR_ID_LEN, "bcb_prior_id returns 16 bytes");
+
+    /* prior-id embed + mismatch (argv[3] = 다른 prior) */
+    if (argc > 3) {
+        BcbPrior *pother = bcb_prior_open(argv[3]);
+        CHECK(pother != NULL, "open second prior");
+        if (pother) {
+            size_t l2 = 0; const uint8_t *id2 = bcb_prior_id(pother, &l2);
+            CHECK(memcmp(id, id2, BCB_PRIOR_ID_LEN) != 0, "distinct priors have distinct ids");
+            BcbEncoder *eid = bcb_encoder_new(p);
+            bcb_encoder_set_prior_id(eid, 1);
+            ssize_t ce = bcb_encode(eid, msg, mlen, comp, cap);
+            BcbDecoder *dok = bcb_decoder_new(p);
+            ssize_t rok = bcb_decode(dok, comp, (size_t)ce, dec, mlen);
+            CHECK(rok == (ssize_t)mlen && memcmp(dec, msg, mlen) == 0, "prior-id: correct prior decodes");
+            BcbDecoder *dbad = bcb_decoder_new(pother);
+            ssize_t rbad = bcb_decode(dbad, comp, (size_t)ce, dec, mlen);
+            CHECK(rbad == BCB_ERR_PRIOR_ID_MISMATCH, "prior-id: wrong prior -> BCB_ERR_PRIOR_ID_MISMATCH");
+            bcb_encoder_free(eid); bcb_decoder_free(dok); bcb_decoder_free(dbad);
+            bcb_prior_close(pother);
+        }
+    }
+
     /* output-too-small error */
     ssize_t e1 = bcb_compress(p, msg, mlen, comp, 1);
     CHECK(e1 == BCB_ERR_OUTPUT_TOO_SMALL, "bcb_compress OUTPUT_TOO_SMALL");
