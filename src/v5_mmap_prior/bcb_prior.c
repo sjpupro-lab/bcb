@@ -280,6 +280,7 @@ static int prior_parse(BcbPrior *p, const void *base, size_t len) {
     p->schema_rec = (int)h->schema_rec; p->schema_pos = (int)h->schema_pos;
     p->schema_modes = (const unsigned char *)m + h->off_schema_modes;
     p->schema_cum   = (const uint16_t *)(m + h->off_schema_cum);
+    bt_v3_ensure_luts();   /* 스레드 생성 전(단일 스레드 open)에 LUT 1회 생성 */
     return 0;
 }
 
@@ -400,6 +401,92 @@ CecBT bcb_prior_cec_bt(BcbPrior *p) {
     bcb_prior_attach(p);
     CecBT bt = btv3_cec_bt_from_prior();
     if (p && p->lm_k) { bt.distribution = landmark_dist; bt.user = p; }
+    return bt;
+}
+
+/* ── per-instance codec (thread-safe; 전역 미사용) ───────────── */
+struct BcbCodec {
+    BcbPrior *p;
+    int mode;                 /* 0 = BT/landmark, 1 = structural */
+    BtV3Reader rd;            /* BT/landmark: window + read-only prior 포인터 */
+    int sc_pos;
+    unsigned char sc_prev[SCHEMA_MAX], sc_cur[SCHEMA_MAX];
+};
+
+static void codec_dist(uint32_t *cum, uint32_t scale, void *user) {
+    BcbCodec *c = (BcbCodec *)user;
+    BcbPrior *p = c->p;
+    if (c->mode == 1) {                       /* structural */
+        int pos = c->sc_pos;
+        if (pos >= p->schema_pos) pos %= p->schema_pos;
+        const uint16_t *w = p->schema_cum + (size_t)pos * 256;
+        uint32_t acc = 0;
+        if (p->schema_modes[pos]) { int sh = c->sc_prev[pos];
+            for (int b = 0; b < 256; b++) { cum[b] = acc; acc += w[(b - sh) & 0xFF]; } }
+        else { for (int b = 0; b < 256; b++) { cum[b] = acc; acc += w[b]; } }
+        cum[256] = acc;
+        if (acc == scale) return;
+        unsigned int u = scale/256, a2 = 0;
+        for (int b=0;b<256;b++){ cum[b]=a2; a2 += (u?u:1); } cum[256]=a2;
+        return;
+    }
+    /* BT/landmark */
+    if (p->lm_k && scale == (uint32_t)LM_SCALE && c->rd.win_len >= p->lm_n) {
+        int idx = lm_lookup(p, c->rd.window + (c->rd.win_len - p->lm_n));
+        if (idx >= 0) {
+            const uint16_t *w = p->lm_cum + (size_t)idx * 256;
+            uint32_t acc = 0;
+            for (int b = 0; b < 256; b++) { cum[b] = acc; acc += w[b]; }
+            cum[256] = acc;
+            if (acc == scale) return;
+        }
+    }
+    bt_v3_distribution_r(&c->rd, cum, scale);
+}
+
+static void codec_train(unsigned char b, void *user) {
+    BcbCodec *c = (BcbCodec *)user;
+    if (c->mode == 1) {
+        c->sc_cur[c->sc_pos] = b;
+        c->sc_pos++;
+        if (c->sc_pos >= c->p->schema_rec) {
+            memcpy(c->sc_prev, c->sc_cur, (size_t)c->p->schema_rec);
+            c->sc_pos = 0;
+        }
+    } else {
+        bt_v3_reader_push(&c->rd, b);
+    }
+}
+
+BcbCodec *bcb_codec_new(BcbPrior *p) {
+    if (!p) return NULL;
+    BcbCodec *c = (BcbCodec *)calloc(1, sizeof *c);
+    if (!c) return NULL;
+    c->p = p;
+    bt_v3_ensure_luts();
+    if (p->schema_rec > 0 && p->schema_pos > 0 && p->schema_rec <= SCHEMA_MAX) {
+        c->mode = 1;
+    } else {
+        c->mode = 0;
+        c->rd.pool = p->snap.pool; c->rd.ctx_pool = p->snap.ctx_pool;
+        c->rd.ctx_slot = (const int *)p->snap.ctx_slot;
+        c->rd.bloom = (const unsigned char *)p->snap.bloom;
+        c->rd.ctx_mask = p->snap.ctx_nslots ? p->snap.ctx_nslots - 1 : 0;
+    }
+    bcb_codec_begin(c);
+    return c;
+}
+
+void bcb_codec_begin(BcbCodec *c) {
+    if (!c) return;
+    if (c->mode == 1) { c->sc_pos = 0; memset(c->sc_prev, 0, sizeof c->sc_prev); memset(c->sc_cur, 0, sizeof c->sc_cur); }
+    else bt_v3_reader_reset_window(&c->rd);
+}
+
+void bcb_codec_free(BcbCodec *c) { free(c); }
+
+CecBT bcb_codec_cec_bt(BcbCodec *c) {
+    CecBT bt; bt.distribution = codec_dist; bt.train = codec_train; bt.user = c;
     return bt;
 }
 

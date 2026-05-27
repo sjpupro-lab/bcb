@@ -9,9 +9,13 @@
  * prior 는 bcb-prior-build 로 미리 만든다 (텍스트형: --landmark-k, 고정 레코드
  * binary: --schema-record-size).
  *
- * 스레드 안전성: BCB 는 단일 전역 코덱 상태를 쓴다. 한 시점에 하나의 prior 로
- * 하나의 (en|de)code 만 진행해야 한다 (프로세스 내 동시 사용 불가). 멀티스레드는
- * prior 별/스레드별 프로세스 분리 또는 외부 락으로 직렬화하라.
+ * 스레드 안전성: 각 BcbEncoder/BcbDecoder 가 자기 상태를 가진다. prior 와 LUT 는
+ * 읽기 전용 공유이므로, 서로 다른 핸들을 여러 스레드가 동시에 써도 안전하다(같은
+ * prior 공유 가능). prior 는 스레드 생성 전에 open 할 것. 하나의 핸들을 여러 스레드가
+ * 동시에 쓰지는 말 것(핸들=인스턴스 상태). 자세히는 docs/api.md.
+ *
+ * 무결성: bcb_compress/bcb_encode 는 기본으로 CRC32 를 넣어 손상 입력에 BCB_ERR_CORRUPTED
+ * 를 반환한다 (bcb_encoder_set_checksum 으로 off 가능).
  */
 #ifndef BCB_H
 #define BCB_H
@@ -24,8 +28,8 @@
 extern "C" {
 #endif
 
-#define BCB_VERSION_MAJOR 1
-#define BCB_VERSION_MINOR 0
+#define BCB_VERSION_MAJOR 0
+#define BCB_VERSION_MINOR 2
 #define BCB_VERSION_PATCH 0
 
 /* 상태/에러 코드. (en|de)code 류는 성공 시 출력 바이트수(>=0), 실패 시 음수 BcbStatus. */
@@ -68,6 +72,9 @@ ssize_t bcb_decompress(BcbPrior *p, const uint8_t *in, size_t in_len,
 BcbEncoder *bcb_encoder_new(BcbPrior *p);
 ssize_t     bcb_encode(BcbEncoder *e, const uint8_t *input, size_t input_len,
                        uint8_t *output, size_t output_capacity);
+/* 메시지마다 4바이트 CRC32 무결성 체크 on/off (기본 on). 작은 메시지에서 최대 압축비를
+ * 원하면 off. 디코더는 컨테이너 태그로 자동 감지하므로 별도 설정 불필요. */
+void        bcb_encoder_set_checksum(BcbEncoder *e, int on);
 void        bcb_encoder_free(BcbEncoder *e);
 
 BcbDecoder *bcb_decoder_new(BcbPrior *p);

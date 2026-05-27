@@ -158,8 +158,9 @@ ssize_t m = bcb_decompress(p, out, (size_t)n, back, sizeof back);  /* m == msg_l
 bcb_prior_close(p);
 ```
 
-one-shot + encoder/decoder 핸들 + 에러 코드 + semver. 단일 전역 코덱 상태(동시 사용은 외부
-직렬화 필요). 전체 레퍼런스·계약·한계: `docs/api.md`.
+one-shot + encoder/decoder 핸들 + 에러 코드 + semver(0.2.0). **스레드 안전**(핸들마다 인스턴스
+상태; prior·LUT 읽기 전용 공유 — `make threads-test` 8스레드 동시 무손실). **CRC32 무결성** 기본 on
+(손상 시 `BCB_ERR_CORRUPTED`; `bcb_encoder_set_checksum` 으로 off). 전체 레퍼런스·계약: `docs/api.md`.
 
 레거시 텍스트 벤치(gzip/bzip2/xz vs 4KB 책 발췌)·v0~v4 개발 기록: `make bench`, `docs/benchmarks_legacy.md`.
 

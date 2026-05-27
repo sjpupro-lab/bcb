@@ -69,6 +69,16 @@ CecBT bcb_prior_cec_bt(BcbPrior *p);
  * bcb_prior_cec_bt 도 내부에서 호출하므로, 같은 bt 로 재인코딩/디코딩할 때만 별도 필요. */
 void bcb_prior_msg_begin(void);
 
+/* ── per-instance codec (thread-safe) ──────────────────────
+ * 전역 상태 대신 인스턴스에 가변 상태(window/structural position)를 담는다. 읽기 전용
+ * prior(mmap 공유) + read-only LUT 만 공유하므로, 서로 다른 BcbCodec 을 여러 스레드가
+ * 동시에 써도 안전하다. (prior 는 스레드 생성 전에 open 할 것 — LUT 1회 생성.) */
+typedef struct BcbCodec BcbCodec;
+BcbCodec *bcb_codec_new(BcbPrior *p);     /* prior 의 읽기 전용 데이터에 바인딩 */
+void      bcb_codec_free(BcbCodec *c);
+void      bcb_codec_begin(BcbCodec *c);   /* 메시지 경계 리셋 */
+CecBT     bcb_codec_cec_bt(BcbCodec *c);  /* 이 codec 에 묶인 CecBT (전역 미사용) */
+
 /* prior 가 record schema 를 가지면 record_size(>0), 없으면 0. */
 int bcb_prior_record_size(const BcbPrior *p);
 
