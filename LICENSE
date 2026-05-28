@@ -1,21 +1,15 @@
-MIT License
-
 Copyright (c) 2026 호시 <jahyag@gmail.com>
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+이 소프트웨어 및 관련 문서 파일("소프트웨어")은 비상업적 목적에 한하여 자유롭게 사용, 복사, 수정, 배포할 수 있습니다.
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+단, 다음 조건을 따라야 합니다:
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+1. 위 저작권 표시 및 이 허가 조건은 소프트웨어의 모든 복사본 또는 주요 부분에 포함되어야 합니다.
+
+2. 상업적 사용 금지:
+   본 소프트웨어를 상업적 목적(수익 창출, 영리 서비스 제공, 기업 내부 업무 활용 등)으로 사용하려면
+   반드시 사전에 저작권자의 서면 동의를 받아야 합니다.
+   상업적 사용에 관한 문의: jahyag@gmail.com
+
+이 소프트웨어는 "있는 그대로" 제공되며, 명시적이거나 묵시적인 어떠한 종류의 보증도 하지 않습니다.
+저작권자는 이 소프트웨어의 사용으로 인해 발생하는 어떠한 손해에 대해서도 책임을 지지 않습니다.
