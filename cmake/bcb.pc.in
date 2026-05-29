@@ -1,0 +1,12 @@
+# Relocatable: prefix is derived from this file's location
+# (<prefix>/<libdir>/pkgconfig/bcb.pc), so it stays correct after relocation.
+prefix=${pcfiledir}/../..
+exec_prefix=${prefix}
+libdir=${prefix}/@CMAKE_INSTALL_LIBDIR@
+includedir=${prefix}/@CMAKE_INSTALL_INCLUDEDIR@
+
+Name: bcb
+Description: BCB — small-message & structured-binary lossless compressor (shared-prior)
+Version: @PROJECT_VERSION@
+Libs: -L${libdir} -lbcb @BCB_PC_LIBM@
+Cflags: -I${includedir}

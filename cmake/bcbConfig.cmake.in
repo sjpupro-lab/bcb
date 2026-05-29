@@ -1,0 +1,14 @@
+@PACKAGE_INIT@
+
+# find_package(bcb) → imported target bcb::bcb (shared if built, else static).
+include("${CMAKE_CURRENT_LIST_DIR}/bcbTargets.cmake")
+
+if(NOT TARGET bcb::bcb)
+  if(TARGET bcb::bcb_shared)
+    add_library(bcb::bcb ALIAS bcb::bcb_shared)
+  elseif(TARGET bcb::bcb_static)
+    add_library(bcb::bcb ALIAS bcb::bcb_static)
+  endif()
+endif()
+
+check_required_components(bcb)

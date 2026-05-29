@@ -17,6 +17,20 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 
+/* These two PUBLIC API functions (declared in bcb.h) are defined here rather than
+ * in bcb_api.c. The shared library is built with hidden visibility, so they must
+ * carry the export attribute to be visible in libbcb.so/.dll. BCB_BUILD is set
+ * only by the CMake shared target; the Makefile build leaves this empty (no-op). */
+#if defined(BCB_BUILD)
+  #if defined(_WIN32) || defined(__CYGWIN__)
+    #define BCB_EXPORT __declspec(dllexport)
+  #else
+    #define BCB_EXPORT __attribute__((visibility("default")))
+  #endif
+#else
+  #define BCB_EXPORT
+#endif
+
 #define BCBP_MAGIC   "BCBP"
 #define BCBP_VERSION 3u
 #define LM_SCALE     CEC_RC_SCALE    /* landmark/schema width 합 = range coder scale */
@@ -423,10 +437,10 @@ BcbPrior *bcb_prior_from_buffer(const void *data, size_t len) {
     return p;
 }
 
-int bcb_prior_record_size(const BcbPrior *p) { return p ? p->schema_rec : 0; }
+BCB_EXPORT int bcb_prior_record_size(const BcbPrior *p) { return p ? p->schema_rec : 0; }
 size_t bcb_prior_map_len(const BcbPrior *p) { return p ? p->map_len : 0; }
 
-void bcb_prior_close(BcbPrior *p) {
+BCB_EXPORT void bcb_prior_close(BcbPrior *p) {
     if (!p) return;
     bt_v3_detach();
     free(p->lm_slot);

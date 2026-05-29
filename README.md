@@ -76,6 +76,32 @@ make build/libbcb.a
 cc -Iinclude my_app.c build/libbcb.a -lm -o my_app
 ```
 
+#### CMake (정적·동적 라이브러리, install, find_package) / cross-platform
+
+Linux·macOS·Windows(MinGW) 공통. 정적(`libbcb.a`)·동적(`libbcb.so`/`.dll`/`.dylib`)
+라이브러리를 모두 빌드하며, 동적 라이브러리는 **공개 API(`include/bcb.h`)만 export**한다.
+
+```sh
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build
+ctest --test-dir build --output-on-failure        # 동적 라이브러리 round-trip 무손실 검증 포함
+cmake --install build --prefix /usr/local
+```
+
+설치 후 다른 프로젝트에서:
+
+```cmake
+find_package(bcb REQUIRED)          # bcb::bcb (동적; 정적만 빌드 시 정적)
+target_link_libraries(app PRIVATE bcb::bcb)
+```
+```sh
+cc my_app.c $(pkg-config --cflags --libs bcb) -o my_app   # pkg-config 도 제공
+```
+
+옵션: `-DBCB_BUILD_SHARED=OFF` / `-DBCB_BUILD_STATIC=OFF` / `-DBCB_BUILD_TOOLS=OFF`
+/ `-DBCB_BUILD_TESTS=OFF`. Windows(MinGW/PowerShell): `cmake -G "MinGW Makefiles" ...`.
+정적 라이브러리를 Windows 에서 링크할 땐 소비자에 `BCB_STATIC` 가 자동 전파된다.
+
 ```c
 #include "bcb.h"
 BcbPrior *p = bcb_prior_open("sensors.bcb-prior");        /* mmap; 또는 _from_memory */
