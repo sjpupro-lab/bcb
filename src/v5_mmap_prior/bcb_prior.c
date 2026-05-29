@@ -3,8 +3,12 @@
  * Proprietary — All Rights Reserved. See LICENSE.
  */
 /* bcb_prior.c — v5 prior 직렬화 + mmap 로드 (+ landmark prior index). */
-#define _POSIX_C_SOURCE 200809L
-#define _DEFAULT_SOURCE              /* madvise / MADV_RANDOM */
+#if defined(_WIN32)
+  #include <windows.h>             /* CreateFileMapping/MapViewOfFile (POSIX mmap 대체) */
+#else
+  #define _POSIX_C_SOURCE 200809L
+  #define _DEFAULT_SOURCE          /* madvise / MADV_RANDOM */
+#endif
 #include "bcb_prior.h"
 #include "btv3.h"
 #include <stdio.h>
@@ -12,10 +16,12 @@
 #include <string.h>
 #include <stdint.h>
 #include <math.h>
-#include <fcntl.h>
-#include <unistd.h>
-#include <sys/mman.h>
-#include <sys/stat.h>
+#if !defined(_WIN32)
+  #include <fcntl.h>
+  #include <unistd.h>
+  #include <sys/mman.h>
+  #include <sys/stat.h>
+#endif
 
 /* These two PUBLIC API functions (declared in bcb.h) are defined here rather than
  * in bcb_api.c. The shared library is built with hidden visibility, so they must
@@ -60,6 +66,10 @@ struct BcbPrior {
     void  *map;          /* mmap 영역 (mmap 로드 시), 아니면 NULL */
     size_t map_len;
     void  *owned_buf;    /* from_memory 가 복사·소유한 버퍼, 아니면 NULL */
+#if defined(_WIN32)
+    void  *win_file;     /* HANDLE (CreateFile)  — close 시 정리 */
+    void  *win_mapping;  /* HANDLE (CreateFileMapping) */
+#endif
     BtV3Snapshot snap;
     /* landmark */
     int             lm_n;
@@ -408,6 +418,30 @@ static int prior_parse(BcbPrior *p, const void *base, size_t len) {
     return 0;
 }
 
+#if defined(_WIN32)
+/* Windows: read-only file mapping via CreateFileMapping/MapViewOfFile (the POSIX
+ * mmap equivalent — page-backed, lazy, ~0 RSS until touched). */
+BcbPrior *bcb_prior_mmap(const char *path) {
+    HANDLE fh = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL,
+                            OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (fh == INVALID_HANDLE_VALUE) return NULL;
+    LARGE_INTEGER sz;
+    if (!GetFileSizeEx(fh, &sz) || sz.QuadPart < (LONGLONG)sizeof(BcbpHeader)) {
+        CloseHandle(fh); return NULL;
+    }
+    HANDLE mh = CreateFileMappingA(fh, NULL, PAGE_READONLY, 0, 0, NULL);
+    if (!mh) { CloseHandle(fh); return NULL; }
+    void *map = MapViewOfFile(mh, FILE_MAP_READ, 0, 0, 0);
+    if (!map) { CloseHandle(mh); CloseHandle(fh); return NULL; }
+    size_t len = (size_t)sz.QuadPart;
+    BcbPrior *p = (BcbPrior *)calloc(1, sizeof *p);
+    if (!p || prior_parse(p, map, len) != 0) {
+        free(p); UnmapViewOfFile(map); CloseHandle(mh); CloseHandle(fh); return NULL;
+    }
+    p->map = map; p->map_len = len; p->win_mapping = mh; p->win_file = fh;
+    return p;
+}
+#else
 BcbPrior *bcb_prior_mmap(const char *path) {
     int fd = open(path, O_RDONLY);
     if (fd < 0) return NULL;
@@ -423,6 +457,7 @@ BcbPrior *bcb_prior_mmap(const char *path) {
     p->map = map; p->map_len = len;
     return p;
 }
+#endif
 
 /* 메모리 버퍼를 복사·소유해 prior 로드 (mmap 불가 환경/임베디드). */
 BcbPrior *bcb_prior_from_buffer(const void *data, size_t len) {
@@ -444,7 +479,13 @@ BCB_EXPORT void bcb_prior_close(BcbPrior *p) {
     if (!p) return;
     bt_v3_detach();
     free(p->lm_slot);
+#if defined(_WIN32)
+    if (p->map) UnmapViewOfFile(p->map);
+    if (p->win_mapping) CloseHandle((HANDLE)p->win_mapping);
+    if (p->win_file) CloseHandle((HANDLE)p->win_file);
+#else
     if (p->map && p->map != MAP_FAILED) munmap(p->map, p->map_len);
+#endif
     free(p->owned_buf);
     free(p);
 }

@@ -16,9 +16,7 @@ permissions:
   contents: read
 
 jobs:
-  # ── native library bundles (Linux + macOS) ──────────────────────────────────
-  # Windows native packaging awaits an mmap shim for src/v5_mmap_prior/bcb_prior.c
-  # (the core currently uses POSIX mmap); tracked separately.
+  # ── native library bundles (Linux + macOS + Windows) ────────────────────────
   build-native:
     name: build ${{ matrix.name }}
     permissions:
@@ -28,9 +26,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: ubuntu-latest, name: linux-x86_64 }
-          - { os: macos-latest,  name: macos-universal }
+          - { os: ubuntu-latest,  name: linux-x86_64,    ext: tar.gz }
+          - { os: macos-latest,   name: macos-universal, ext: tar.gz }
+          - { os: windows-latest, name: windows-x86_64,  ext: zip }
     runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash             # windows-latest ships Git bash; keeps steps uniform
     steps:
       - uses: actions/checkout@v4
 
@@ -40,19 +42,23 @@ jobs:
       - name: Build
         run: cmake --build build --config Release -j
 
-      - name: Sanity tests
-        run: ctest --test-dir build --output-on-failure
+      - name: Sanity tests (incl. dynamic-lib round-trip)
+        run: ctest --test-dir build -C Release --output-on-failure
 
-      - name: Stage install tree
+      - name: Stage install tree + archive (cross-platform via cmake -E)
         id: stage
-        shell: bash
         run: |
           ver="${GITHUB_REF_NAME#v}"; [ -n "$ver" ] || ver="0.0.0-dev"
           name="bcb-${ver}-${{ matrix.name }}"
-          cmake --install build --prefix "staging/${name}"
+          cmake --install build --config Release --prefix "staging/${name}"
           cp LICENSE "staging/${name}/" || true
           mkdir -p dist
-          tar -C staging -czf "dist/${name}.tar.gz" "${name}"
+          cd staging
+          if [ "${{ matrix.ext }}" = "zip" ]; then
+            cmake -E tar cf "../dist/${name}.zip" --format=zip -- "${name}"
+          else
+            cmake -E tar czf "../dist/${name}.tar.gz" --format=gnutar -- "${name}"
+          fi
           echo "name=${name}" >> "$GITHUB_OUTPUT"
 
       - name: Generate SBOM (CycloneDX)
@@ -63,19 +69,17 @@ jobs:
           output-file: dist/${{ steps.stage.outputs.name }}.cdx.json
           artifact-name: ${{ steps.stage.outputs.name }}.cdx.json
 
-      - name: Checksums
-        shell: bash
+      - name: Checksums (cross-platform via cmake -E)
         working-directory: dist
-        run: shasum -a 256 * > "${{ steps.stage.outputs.name }}.sha256"
+        run: cmake -E sha256sum "${{ steps.stage.outputs.name }}.${{ matrix.ext }}" "${{ steps.stage.outputs.name }}.cdx.json" > "${{ steps.stage.outputs.name }}.sha256"
 
       - name: Install cosign
         uses: sigstore/cosign-installer@v3
 
       - name: Sign artifacts (keyless / Sigstore)
-        shell: bash
         working-directory: dist
         run: |
-          for f in *.tar.gz *.cdx.json; do
+          for f in "${{ steps.stage.outputs.name }}.${{ matrix.ext }}" "${{ steps.stage.outputs.name }}.cdx.json"; do
             cosign sign-blob --yes --output-signature "$f.sig" --output-certificate "$f.pem" "$f"
           done
 
@@ -85,14 +89,17 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
-  # ── Python wheels (Linux + macOS) ───────────────────────────────────────────
+  # ── Python wheels (Linux + macOS + Windows) ─────────────────────────────────
   build-wheels:
     name: wheels ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
 

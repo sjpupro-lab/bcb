@@ -22,7 +22,17 @@
 
 #include <stddef.h>
 #include <stdint.h>
-#include <sys/types.h>   /* ssize_t */
+
+/* ssize_t: POSIX/MinGW provide it via <sys/types.h>; MSVC does not. */
+#if defined(_MSC_VER)
+  #include <BaseTsd.h>
+  #ifndef _SSIZE_T_DEFINED
+    #define _SSIZE_T_DEFINED
+    typedef SSIZE_T ssize_t;
+  #endif
+#else
+  #include <sys/types.h>   /* ssize_t */
+#endif
 
 /* ── 심볼 가시성 / symbol visibility ──────────────────────────
  * 동적 라이브러리(.so/.dll/.dylib) 빌드 시 공개 API 만 export 하고 내부 심볼은 숨긴다.
