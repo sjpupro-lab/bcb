@@ -4,6 +4,8 @@
  */
 /* bcb_prior.c — v5 prior 직렬화 + mmap 로드 (+ landmark prior index). */
 #if defined(_WIN32)
+  #define WIN32_LEAN_AND_MEAN
+  #define NOMINMAX
   #include <windows.h>             /* CreateFileMapping/MapViewOfFile (POSIX mmap 대체) */
 #else
   #define _POSIX_C_SOURCE 200809L

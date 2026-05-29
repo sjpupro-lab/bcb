@@ -16,7 +16,10 @@ cmake_minimum_required(VERSION 3.15)
 project(bcb VERSION 0.2.0 LANGUAGES C)
 
 set(CMAKE_C_STANDARD 99)
-set(CMAKE_C_STANDARD_REQUIRED ON)
+# REQUIRED OFF on purpose: MSVC has no discrete C99 mode, so REQUIRED ON makes
+# CMake fail at *configure* time on Windows. The source is C99; on MSVC we select
+# /std:c11 below (a C99 superset), and other compilers honor C99 normally.
+set(CMAKE_C_STANDARD_REQUIRED OFF)
 set(CMAKE_C_EXTENSIONS OFF)
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
   set(CMAKE_BUILD_TYPE Release CACHE STRING "" FORCE)
