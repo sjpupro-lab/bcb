@@ -13,3 +13,7 @@ seeds_prior/valid.bcb-prior
 # auto-written libFuzzer corpus units (hash-named); curated seeds only
 seeds_prior/*
 !seeds_prior/.gitkeep
+
+# auto-written libFuzzer corpus units (hash-named); curated c_*.bin only
+seeds_decompress/*
+!seeds_decompress/c_*.bin
