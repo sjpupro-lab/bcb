@@ -19,7 +19,7 @@
 - `LICENSE`: 순수 **MIT** 단일. 저작권자 1인(호시 <jahyag@gmail.com>), org `sjpupro-lab`.
 - `AUTHORS`: 기여자 1인. → **현재까지는 단일 저작권자**라 재라이선싱·듀얼 라이선싱에
   제3자 동의가 필요 없다(중요 — 아래 §7 CLA 참고).
-- 소스 헤더 전반: `Licensed under the MIT License. See LICENSE.`
+- 소스 헤더 전반: `Proprietary — All Rights Reserved. See LICENSE.`
 - 배포 형태: 정적 라이브러리 `libbcb.a`(+ 임베디드 C API). 동적 라이브러리는 아직 없음.
 - `CONTRIBUTING` / `CLA` / `DCO` 없음.
 

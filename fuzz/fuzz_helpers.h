@@ -1,6 +1,6 @@
 /* BCB — Binary Compression by BT
  * Copyright (c) 2026 호시 <jahyag@gmail.com>
- * Licensed under the MIT License. See LICENSE.
+ * Proprietary — All Rights Reserved. See LICENSE.
  */
 /* fuzz_helpers.h — build a *valid* .bcb-prior image in memory for fuzz harnesses
  * and seed generation. Uses the internal btv3 training path (same as

@@ -1,6 +1,6 @@
 # BCB — Binary Compression by BT
 # Copyright (c) 2026 호시 <jahyag@gmail.com>
-# Licensed under the MIT License. See LICENSE.
+# Proprietary — All Rights Reserved. See LICENSE.
 
 CC      ?= cc
 CFLAGS  ?= -std=c99 -O2 -Wall -Wextra

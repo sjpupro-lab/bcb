@@ -1,6 +1,6 @@
 /* BCB — Binary Compression by BT
  * Copyright (c) 2026 호시 <jahyag@gmail.com>
- * Licensed under the MIT License. See LICENSE.
+ * Proprietary — All Rights Reserved. See LICENSE.
  */
 /* bcb_prior.c — v5 prior 직렬화 + mmap 로드 (+ landmark prior index). */
 #define _POSIX_C_SOURCE 200809L

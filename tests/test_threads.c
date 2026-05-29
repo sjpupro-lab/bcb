@@ -1,6 +1,6 @@
 /* BCB — Binary Compression by BT
  * Copyright (c) 2026 호시 <jahyag@gmail.com>
- * Licensed under the MIT License. See LICENSE.
+ * Proprietary — All Rights Reserved. See LICENSE.
  */
 /* test_threads.c — 멀티스레드 동시 encode/decode round-trip 무손실 (de-globalize 검증).
  *   test_threads <prior> <data-file> [threads] [iters]
