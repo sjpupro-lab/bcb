@@ -1,6 +1,6 @@
 /* BCB — Binary Compression by BT
  * Copyright (c) 2026 호시 <jahyag@gmail.com>
- * Licensed under the MIT License. See LICENSE.
+ * Proprietary — All Rights Reserved. See LICENSE.
  */
 /* bcb-meminfo.c — v3 BT 메모리 footprint + 작은 round-trip 점검
  *

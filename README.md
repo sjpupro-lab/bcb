@@ -5,7 +5,7 @@
 A lossless compressor for **small messages and fixed-layout binary records** that share a
 learned prior. All-integer / libm-free core, embeddable stable C API.
 
-Author: 호시 <jahyag@gmail.com> · Org: sjpupro-lab · License: MIT · API v0.2
+Author: 호시 <jahyag@gmail.com> · Org: sjpupro-lab · License: Proprietary (All Rights Reserved) · API v0.2
 
 ---
 
@@ -239,4 +239,16 @@ docs/                   api, benchmarks, use_cases, landmark, structural, struct
 
 ## License
 
-MIT. See [LICENSE](LICENSE) and [AUTHORS](AUTHORS). © 2026 호시 <jahyag@gmail.com>
+**Proprietary — All Rights Reserved.** © 2026 호시 <jahyag@gmail.com>
+
+This software is proprietary. No use, copying, distribution, modification, or
+reverse engineering is permitted without a separate written license. See
+[LICENSE](LICENSE) for the full terms and [AUTHORS](AUTHORS).
+
+**Commercial licensing / evaluation inquiries:** 호시 <jahyag@gmail.com>.
+A commercial EULA and annual subscription terms are in preparation
+(`docs/commercial/`, draft — pending legal review).
+
+> Note: earlier versions were published under the MIT License and those specific
+> prior releases remain available under their original terms; this notice governs
+> the current and subsequent versions (see [LICENSE](LICENSE)).

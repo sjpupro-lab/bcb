@@ -1,6 +1,6 @@
 /* BCB — Binary Compression by BT
  * Copyright (c) 2026 호시 <jahyag@gmail.com>
- * Licensed under the MIT License. See LICENSE.
+ * Proprietary — All Rights Reserved. See LICENSE.
  */
 /* test_v3_pool.c — BT_POOL 크기별 대규모 학습 측정
  *

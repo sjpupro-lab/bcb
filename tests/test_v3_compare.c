@@ -1,6 +1,6 @@
 /* BCB — Binary Compression by BT
  * Copyright (c) 2026 호시 <jahyag@gmail.com>
- * Licensed under the MIT License. See LICENSE.
+ * Proprietary — All Rights Reserved. See LICENSE.
  */
 /* test_v3_compare.c — v0 vs v3 (distribution caching) 검증
  *

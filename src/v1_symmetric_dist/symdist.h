@@ -1,6 +1,6 @@
 /* BCB — Binary Compression by BT
  * Copyright (c) 2026 호시 <jahyag@gmail.com>
- * Licensed under the MIT License. See LICENSE.
+ * Proprietary — All Rights Reserved. See LICENSE.
  */
 /* symdist.h — v1: 대칭쌍 분포 활용 (작업 항목 #1)
  *

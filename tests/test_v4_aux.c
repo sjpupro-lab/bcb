@@ -1,6 +1,6 @@
 /* BCB — Binary Compression by BT
  * Copyright (c) 2026 호시 <jahyag@gmail.com>
- * Licensed under the MIT License. See LICENSE.
+ * Proprietary — All Rights Reserved. See LICENSE.
  */
 /* test_v4_aux.c — v4 보조채널 ablation
  *

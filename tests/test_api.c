@@ -1,6 +1,6 @@
 /* BCB — Binary Compression by BT
  * Copyright (c) 2026 호시 <jahyag@gmail.com>
- * Licensed under the MIT License. See LICENSE.
+ * Proprietary — All Rights Reserved. See LICENSE.
  */
 /* test_api.c — include/bcb.h 공개 API 검증 (libbcb 만 링크, 내부 헤더 미사용).
  *   test_api <prior.bcb-prior> <message-file>

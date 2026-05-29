@@ -1,6 +1,6 @@
 /* BCB — Binary Compression by BT
  * Copyright (c) 2026 호시 <jahyag@gmail.com>
- * Licensed under the MIT License. See LICENSE.
+ * Proprietary — All Rights Reserved. See LICENSE.
  */
 /* aux.c — v4 보조채널 (단계 4: 정수 전용 blend + v3 정수 BT 연결) */
 #include "aux.h"
