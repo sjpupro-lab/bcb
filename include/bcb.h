@@ -24,6 +24,27 @@
 #include <stdint.h>
 #include <sys/types.h>   /* ssize_t */
 
+/* ── 심볼 가시성 / symbol visibility ──────────────────────────
+ * 동적 라이브러리(.so/.dll/.dylib) 빌드 시 공개 API 만 export 하고 내부 심볼은 숨긴다.
+ *   - 라이브러리(공유) 빌드: BCB_BUILD 정의 (CMake 가 설정) → export.
+ *   - Windows 정적 라이브러리 소비자: BCB_STATIC 정의 (정적 타깃이 INTERFACE 로 전파).
+ *   - 그 외(헤더만 포함하는 소비자): import (Windows) / 평문 (ELF/Mach-O). */
+#if defined(_WIN32) || defined(__CYGWIN__)
+  #if defined(BCB_STATIC)
+    #define BCB_API
+  #elif defined(BCB_BUILD)
+    #define BCB_API __declspec(dllexport)
+  #else
+    #define BCB_API __declspec(dllimport)
+  #endif
+#else
+  #if defined(BCB_BUILD)
+    #define BCB_API __attribute__((visibility("default")))
+  #else
+    #define BCB_API
+  #endif
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -53,51 +74,51 @@ typedef struct BcbDecoder BcbDecoder;
 
 /* ── Prior — 학습된 모델 ─────────────────────────────────── */
 /* 파일을 mmap 으로 연다 (RAM 거의 0, 즉시 시작). 실패 시 NULL. */
-BcbPrior *bcb_prior_open(const char *path);
+BCB_API BcbPrior *bcb_prior_open(const char *path);
 /* 메모리 이미지를 복사·소유해 연다 (mmap 불가 환경). 실패 시 NULL. */
-BcbPrior *bcb_prior_from_memory(const void *data, size_t len);
-void      bcb_prior_close(BcbPrior *p);
+BCB_API BcbPrior *bcb_prior_from_memory(const void *data, size_t len);
+BCB_API void      bcb_prior_close(BcbPrior *p);
 /* prior 의 대략적 메모리 footprint(bytes): mmap 매핑 길이(+RAM 보조 테이블). */
-size_t    bcb_prior_memory_footprint(const BcbPrior *p);
+BCB_API size_t    bcb_prior_memory_footprint(const BcbPrior *p);
 /* record schema 가 있으면 record_size(>0), 없으면 0. */
-int       bcb_prior_record_size(const BcbPrior *p);
+BCB_API int       bcb_prior_record_size(const BcbPrior *p);
 /* prior 의 고유 id (SHA-256(prior 이미지) 앞 16바이트). *out_len = BCB_PRIOR_ID_LEN.
  * 같은 학습으로 만든 prior 는 같은 id. encode/decode 양쪽 prior 일치 확인용. */
-const uint8_t *bcb_prior_id(const BcbPrior *p, size_t *out_len);
+BCB_API const uint8_t *bcb_prior_id(const BcbPrior *p, size_t *out_len);
 
 /* 입력 input_len 에 대해 출력 버퍼가 반드시 충분한 크기(상한). zstd/lz4 의 _bound 패턴.
  * BCB 는 비압축성 입력에서 팽창할 수 있으므로(range coder 최악 ~14bit/byte) 보수적 상한. */
-size_t bcb_compress_bound(size_t input_len);
+BCB_API size_t bcb_compress_bound(size_t input_len);
 
 /* ── One-shot (encoder/decoder 할당 없이) ─────────────────── */
 /* in[0..in_len) 를 out 으로 압축. 성공 시 출력 바이트수, 실패 시 음수 BcbStatus.
  * 출력은 자기 기술적(원본 길이 포함)이라 bcb_decompress 가 길이를 안다. */
-ssize_t bcb_compress(BcbPrior *p, const uint8_t *in, size_t in_len,
-                     uint8_t *out, size_t out_capacity);
+BCB_API ssize_t bcb_compress(BcbPrior *p, const uint8_t *in, size_t in_len,
+                             uint8_t *out, size_t out_capacity);
 /* bcb_compress 출력을 복원. 성공 시 원본 바이트수, 실패 시 음수 BcbStatus. */
-ssize_t bcb_decompress(BcbPrior *p, const uint8_t *in, size_t in_len,
-                       uint8_t *out, size_t out_capacity);
+BCB_API ssize_t bcb_decompress(BcbPrior *p, const uint8_t *in, size_t in_len,
+                               uint8_t *out, size_t out_capacity);
 
 /* ── Encoder / Decoder 핸들 (prior 재사용; 메시지마다 reset) ── */
-BcbEncoder *bcb_encoder_new(BcbPrior *p);
-ssize_t     bcb_encode(BcbEncoder *e, const uint8_t *input, size_t input_len,
-                       uint8_t *output, size_t output_capacity);
+BCB_API BcbEncoder *bcb_encoder_new(BcbPrior *p);
+BCB_API ssize_t     bcb_encode(BcbEncoder *e, const uint8_t *input, size_t input_len,
+                               uint8_t *output, size_t output_capacity);
 /* 메시지마다 4바이트 CRC32 무결성 체크 on/off (기본 on). 작은 메시지에서 최대 압축비를
  * 원하면 off. 디코더는 컨테이너 태그로 자동 감지하므로 별도 설정 불필요. */
-void        bcb_encoder_set_checksum(BcbEncoder *e, int on);
+BCB_API void        bcb_encoder_set_checksum(BcbEncoder *e, int on);
 /* 압축본에 prior id(16B)를 박는다 (기본 off). on 이면 디코더가 prior 불일치를
  * BCB_ERR_PRIOR_ID_MISMATCH 로 즉시 잡는다. 작은 메시지엔 16B 오버헤드 주의. */
-void        bcb_encoder_set_prior_id(BcbEncoder *e, int on);
-void        bcb_encoder_free(BcbEncoder *e);
+BCB_API void        bcb_encoder_set_prior_id(BcbEncoder *e, int on);
+BCB_API void        bcb_encoder_free(BcbEncoder *e);
 
-BcbDecoder *bcb_decoder_new(BcbPrior *p);
-ssize_t     bcb_decode(BcbDecoder *d, const uint8_t *input, size_t input_len,
-                       uint8_t *output, size_t output_capacity);
-void        bcb_decoder_free(BcbDecoder *d);
+BCB_API BcbDecoder *bcb_decoder_new(BcbPrior *p);
+BCB_API ssize_t     bcb_decode(BcbDecoder *d, const uint8_t *input, size_t input_len,
+                               uint8_t *output, size_t output_capacity);
+BCB_API void        bcb_decoder_free(BcbDecoder *d);
 
 /* ── 잡 ──────────────────────────────────────────────────── */
-const char *bcb_strerror(BcbStatus s);   /* 에러 코드 → 사람이 읽는 문자열 */
-const char *bcb_version(void);            /* semver 문자열 "0.2.0" */
+BCB_API const char *bcb_strerror(BcbStatus s);   /* 에러 코드 → 사람이 읽는 문자열 */
+BCB_API const char *bcb_version(void);            /* semver 문자열 "0.2.0" */
 
 #ifdef __cplusplus
 }
