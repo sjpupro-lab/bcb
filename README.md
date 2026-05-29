@@ -102,6 +102,17 @@ cc my_app.c $(pkg-config --cflags --libs bcb) -o my_app   # pkg-config 도 제�
 / `-DBCB_BUILD_TESTS=OFF`. Windows(MinGW/PowerShell): `cmake -G "MinGW Makefiles" ...`.
 정적 라이브러리를 Windows 에서 링크할 땐 소비자에 `BCB_STATIC` 가 자동 전파된다.
 
+#### Python 바인딩 / Python bindings (`bindings/python/`)
+
+cffi 로 C 코어를 직접 컴파일한 자체 완결 확장. 설치·사용·API 는 `bindings/python/README.md`.
+
+```python
+import bcb
+with bcb.Prior("sensors.bcb-prior") as p:        # 컨텍스트 매니저
+    comp = p.compress(b"...packet...")           # checksum/prior_id 토글
+    back = p.decompress(comp, original_len=n)     # BcbError 예외 매핑
+```
+
 ```c
 #include "bcb.h"
 BcbPrior *p = bcb_prior_open("sensors.bcb-prior");        /* mmap; 또는 _from_memory */

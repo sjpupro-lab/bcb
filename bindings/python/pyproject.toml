@@ -1,0 +1,50 @@
+[build-system]
+requires = ["setuptools>=64", "cffi>=1.15", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bcb"
+version = "0.2.0"
+description = "BCB — small-message & fixed-record lossless compression with a shared learned prior"
+readme = "README.md"
+requires-python = ">=3.8"
+authors = [{ name = "호시", email = "jahyag@gmail.com" }]
+license = { text = "Proprietary — All Rights Reserved" }
+keywords = ["compression", "lossless", "iot", "telemetry", "embedded"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: Other/Proprietary License",
+    "Programming Language :: C",
+    "Programming Language :: Python :: 3",
+    "Topic :: System :: Archiving :: Compression",
+]
+dependencies = ["cffi>=1.15"]
+
+[project.urls]
+Homepage = "https://github.com/sjpupro-lab/bcb"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+packages = ["bcb"]
+
+# ── multi-platform wheels (cibuildwheel) ─────────────────────────────────────
+# The extension compiles the BCB core C sources, which currently use POSIX mmap,
+# so wheels target Linux + macOS. Windows needs an mmap shim for bcb_prior.c
+# (tracked separately). Build from the repo root so the C sources are present:
+#   BCB_REPO_ROOT=$PWD python -m cibuildwheel --output-dir wheelhouse bindings/python
+[tool.cibuildwheel]
+build = "cp38-* cp39-* cp310-* cp311-* cp312-* cp313-*"
+skip = "*-musllinux_i686 *_i686"
+build-frontend = "build"
+test-requires = "pytest"
+# tests need the C toolchain + prior-build tool from the repo; run the binding's
+# own round-trip suite against a prior built from the bundled corpus.
+test-command = "pytest {project}/bindings/python/tests -q"
+
+[tool.cibuildwheel.linux]
+archs = ["x86_64", "aarch64"]
+environment = { BCB_REPO_ROOT = "/project" }
+
+[tool.cibuildwheel.macos]
+archs = ["x86_64", "arm64"]
