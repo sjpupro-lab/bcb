@@ -1,0 +1,55 @@
+name: fuzz
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    # Core keeps persistent global LUTs + a session-lifetime prior by design;
+    # these harnesses target memory safety (OOB/UB), not leaks.
+    env:
+      ASAN_OPTIONS: detect_leaks=0:abort_on_error=1
+      UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install clang + sanitizer runtimes
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang libclang-rt-18-dev
+
+      - name: Build harnesses (libFuzzer + ASan/UBSan)
+        working-directory: fuzz
+        run: make CC=clang
+
+      - name: Generate seed corpus (valid prior + containers)
+        working-directory: fuzz
+        run: make CC=clang seeds
+
+      # Deterministic gate: every committed regression seed must stay fixed.
+      - name: Replay regression corpus
+        working-directory: fuzz
+        run: make CC=clang repro
+
+      # Short coverage-guided round to catch new regressions on each change.
+      - name: Fuzz prior parser (60s)
+        working-directory: fuzz
+        run: ./fuzz_prior -max_total_time=60 -print_final_stats=1 seeds_prior regressions
+
+      - name: Fuzz decode path (60s)
+        working-directory: fuzz
+        run: ./fuzz_decompress -max_total_time=60 -print_final_stats=1 seeds_decompress
+
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crashes
+          path: |
+            fuzz/crash-*
+            fuzz/timeout-*
+            fuzz/oom-*
+          if-no-files-found: ignore

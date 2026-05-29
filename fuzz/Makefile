@@ -45,12 +45,15 @@ run: $(HARNESSES)
 	./fuzz_prior -max_total_time=$(RUN_SECS) -print_final_stats=1 seeds_prior regressions
 	./fuzz_decompress -max_total_time=$(RUN_SECS) -print_final_stats=1 seeds_decompress
 
-# Deterministic regression gate: replay every committed crash seed. Exits
-# non-zero if any seed still crashes. Safe to run with an empty corpus.
+# Deterministic regression gate: replay every committed seed/crash. libFuzzer
+# runs the target once per file in each directory and exits non-zero on the
+# first crash; empty directories are fine. NOT guarded with `|| true` so a
+# reintroduced crash fails the build. regressions/ is fed to both harnesses
+# (prior seeds are just arbitrary container bytes to the decode harness).
 repro: $(HARNESSES)
 	@echo "== replay regression seeds =="
-	./fuzz_prior seeds_prior/* regressions/prior-* 2>/dev/null || true
-	./fuzz_decompress seeds_decompress/* regressions/decompress-* 2>/dev/null || true
+	./fuzz_prior -runs=0 seeds_prior regressions
+	./fuzz_decompress -runs=0 seeds_decompress regressions
 	@echo "== replay OK (no crash) =="
 
 # Regenerate decompress seeds: one valid prior + a few valid containers.
