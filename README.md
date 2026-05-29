@@ -21,6 +21,27 @@ records), BCB beats brotli/zstd + dictionary.
 
 ---
 
+## 30초 Quickstart / 30-second Quickstart
+
+```sh
+# 1) 빌드 (CMake: 정적·동적 라이브러리 + CLI; 또는 `make all`)
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build
+
+# 2) 학습 코퍼스로 공유 prior 1회 빌드 (인코더·디코더가 같은 파일을 공유)
+./build/bcb-prior-build train.txt sensors.bcb-prior --train-size 50000 --landmark-k 256
+#   고정 레코드 binary 면:  --schema-record-size 18
+
+# 3) encode → decode (round-trip 무손실)
+./build/bcb-cli encode msg.bin msg.bcb  --prior sensors.bcb-prior
+./build/bcb-cli decode msg.bcb msg.out  --prior sensors.bcb-prior
+cmp msg.bin msg.out && echo "lossless ✓"
+```
+
+C 라이브러리(`#include "bcb.h"`)·Python(`import bcb`)·CMake `find_package(bcb)` 사용법은
+아래 [Library API](#라이브러리--library-api-includebcbh) 참고.
+
+---
+
 ## 언제 쓰나 / When to use
 
 - ✅ **작은 메시지**(≤~512B): HTTP 헤더, MQTT/CoAP/gRPC, syslog, 푸시 알림, RPC. (`docs/benchmarks.md`)
@@ -186,6 +207,10 @@ landmark-verify, structural-verify, api-test, threads-test)을 검사한다.
 Sigstore(cosign) 서명 + SHA-256 체크섬**을 붙여 GitHub Releases·PyPI 에 게시한다(게시는
 수동 승인 environment 게이트). 검증 방법은 [`SECURITY.md`](SECURITY.md), 절차·셋업은
 [`docs/releases.md`](docs/releases.md). 취약점 신고도 [`SECURITY.md`](SECURITY.md) 참고.
+
+기여 방법·코드 스타일·필수 통과 게이트는 [`CONTRIBUTING.md`](CONTRIBUTING.md),
+행동 강령은 [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md), 버전별 변경은
+[`CHANGELOG.md`](CHANGELOG.md).
 
 ---
 
