@@ -247,7 +247,7 @@ int main(int argc, char **argv) {
     if (ntest == 0) { fprintf(stderr, "no test messages\n"); return 1; }
 
     double R_bcb=(double)orig/bcb, R_br=(double)orig/br, R_zs=(double)orig/zs, R_gz=(double)orig/gz, R_zl=(double)orig/zl;
-    const char *bcb_label = structural ? "BCB+struct" : "BCB+lm";
+    const char *bcb_label = structural ? "BCB+struct" : (lm_k > 0 ? "BCB+lm" : "BCB base");
     if (md) {
         if (label) printf("### %s\n\n", label);
         printf("| codec | total bytes | ratio | lossless |\n|---|---|---|---|\n");
