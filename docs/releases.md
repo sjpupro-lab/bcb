@@ -10,7 +10,8 @@ artifacts **without** publishing (useful for dry runs).
 
 ## What a release contains
 
-Per native platform (Linux x86_64, macOS) a bundle built and installed via CMake:
+Per native platform (Linux x86_64, macOS universal, Windows x86_64) a bundle
+built and installed via CMake:
 
 ```
 bcb-<ver>-<platform>.tar.gz        # libbcb.a + libbcb.so/.dylib + bcb.h + CLI + cmake/pkg-config + LICENSE
@@ -19,11 +20,12 @@ bcb-<ver>-<platform>.sha256        # SHA-256 checksums
 *.sig  /  *.pem                    # Sigstore (cosign) signature + certificate
 ```
 
-Plus Python **wheels** (`cibuildwheel`, Linux + macOS) attached to the release
-and, gated, published to PyPI.
+Plus Python **wheels** (`cibuildwheel`, Linux + macOS + Windows) attached to the
+release and, gated, published to PyPI.
 
-> Windows native bundles are **not** produced yet: the core uses POSIX `mmap`
-> (`src/v5_mmap_prior/bcb_prior.c`); a Windows `mmap` shim is needed first.
+> Windows uses the Win32 file-mapping shim in `src/v5_mmap_prior/bcb_prior.c`
+> (`CreateFileMapping`/`MapViewOfFile`) instead of POSIX `mmap`. The `windows`
+> CI job builds with MSVC and runs the dynamic-library round-trip test.
 
 ## Verifying (consumers)
 

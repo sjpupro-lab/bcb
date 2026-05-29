@@ -8,7 +8,7 @@ v3 정수화(단계 1~4) 완료. BT 분포 hot path 에 `double`·libm 없음. `
 - **v3 BT** (`src/v3_integer_bt/btv3.c`) — 분포 hot path 정수 전용
   (log-domain: `EXP_LOG2`/`CONF_LOG2`/`EXP2_FRAC` 정수 LUT). LUT 는 init 에서 정수
   `log2`/`exp2`(integer sqrt 기반) 로 생성 — **libm(`<math.h>`) 불필요**.
-- **v4 보조채널** (`src/v4_aux_channel/aux.c`) — blend 정수화 (Q16 α, 정수 prior 폭).
+- **v4 보조채널** (`src/v4_aux_channel/aux_channel.c`) — blend 정수화 (Q16 α, 정수 prior 폭).
 
 ## 메모리 footprint (`make meminfo`, 실측)
 

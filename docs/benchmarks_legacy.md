@@ -115,7 +115,7 @@ context 를 안 건드리고 byte type prior 를 별도 학습해 α=0.985 로 b
 
 ### v4 byte_type — 레포 재현 (`make v4-aux`)
 
-`src/v4_aux_channel/aux.c` 의 `AuxChannel` (byte_type, 7-type, α=0.985) 구현으로 재측정
+`src/v4_aux_channel/aux_channel.c` 의 `AuxChannel` (byte_type, 7-type, α=0.985) 구현으로 재측정
 (50KB 학습 / 4KB 발췌 @ off 60000, baseline=v1a):
 
 | 책 | base(B) | +aux(B) | 개선 | lossless |

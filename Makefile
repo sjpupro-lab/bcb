@@ -20,7 +20,7 @@ V3_SRC  := $(V3_DIR)/btv3.c
 
 V4_DIR  := src/v4_aux_channel
 V4_INC  := -I$(V4_DIR)
-V4_SRC  := $(V4_DIR)/aux.c
+V4_SRC  := $(V4_DIR)/aux_channel.c
 
 V5_DIR  := src/v5_mmap_prior
 V5_INC  := -I$(V5_DIR)

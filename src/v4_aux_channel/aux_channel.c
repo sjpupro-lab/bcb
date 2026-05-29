@@ -2,8 +2,9 @@
  * Copyright (c) 2026 호시 <jahyag@gmail.com>
  * Proprietary — All Rights Reserved. See LICENSE.
  */
-/* aux.c — v4 보조채널 (단계 4: 정수 전용 blend + v3 정수 BT 연결) */
-#include "aux.h"
+/* aux_channel.c — v4 보조채널 (단계 4: 정수 전용 blend + v3 정수 BT 연결).
+ * 파일명은 'aux' (Windows 예약어) 회피를 위해 aux_channel 로 둔다. */
+#include "aux_channel.h"
 #include "symdist.h"
 #include "btv3.h"
 #include <stdlib.h>

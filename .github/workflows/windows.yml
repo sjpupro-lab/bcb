@@ -1,0 +1,26 @@
+name: windows
+
+# Real on-Windows verification: build the static + shared library, CLI, and the
+# public-API test with MSVC via CMake, then run ctest — which builds a prior and
+# round-trips it through libbcb.dll (api_shared). Confirms the Win32 file-mapping
+# shim in src/v5_mmap_prior/bcb_prior.c works and the DLL exports the public API.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  build-test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure (CMake / MSVC)
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --config Release
+
+      - name: Test (dynamic-lib round-trip on Windows)
+        run: ctest --test-dir build -C Release --output-on-failure

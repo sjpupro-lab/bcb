@@ -16,10 +16,21 @@ cmake_minimum_required(VERSION 3.15)
 project(bcb VERSION 0.2.0 LANGUAGES C)
 
 set(CMAKE_C_STANDARD 99)
-set(CMAKE_C_STANDARD_REQUIRED ON)
+# REQUIRED OFF on purpose: MSVC has no discrete C99 mode, so REQUIRED ON makes
+# CMake fail at *configure* time on Windows. The source is C99; on MSVC we select
+# /std:c11 below (a C99 superset), and other compilers honor C99 normally.
+set(CMAKE_C_STANDARD_REQUIRED OFF)
 set(CMAKE_C_EXTENSIONS OFF)
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
   set(CMAKE_BUILD_TYPE Release CACHE STRING "" FORCE)
+endif()
+
+# MSVC: CMAKE_C_STANDARD 99 selects no flag (MSVC has no C99 mode), and the
+# default C mode rejects C99 features this codebase uses (mixed declarations,
+# `inline`, for-init declarations). Force C11 (a superset) so MSVC accepts the
+# C99 source unchanged, and silence the CRT fopen/strcpy deprecation warnings.
+if(MSVC)
+  add_compile_options(/std:c11 /D_CRT_SECURE_NO_WARNINGS)
 endif()
 
 option(BCB_BUILD_SHARED "Build shared library (libbcb.so/.dll/.dylib)" ON)
@@ -123,14 +134,9 @@ if(BCB_BUILD_TESTS)
     target_include_directories(test_api PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
     target_link_libraries(test_api PRIVATE bcb_shared)
 
-    find_package(Threads)
-    add_executable(test_threads tests/test_threads.c)
-    target_include_directories(test_threads PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
-    target_link_libraries(test_threads PRIVATE bcb_shared Threads::Threads)
-
-    # Driver builds a prior from the committed corpus, then runs the API +
-    # thread tests against the shared library — verifies dynamic-lib round-trip
-    # lossless + corruption detection. Cross-platform via `cmake -P`.
+    # Driver builds a prior from the committed corpus, then runs a public-API test
+    # against the SHARED library — verifies dynamic-lib (.so/.dll/.dylib)
+    # round-trip lossless + corruption detection. Cross-platform via `cmake -P`.
     set(_drv ${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/api_roundtrip.cmake)
     add_test(NAME api_shared COMMAND ${CMAKE_COMMAND}
         -DPRIOR_BUILD=$<TARGET_FILE:bcb-prior-build>
@@ -138,15 +144,27 @@ if(BCB_BUILD_TESTS)
         -DCORPUS=${CMAKE_CURRENT_SOURCE_DIR}/tests/corpus/pride_and_prejudice.txt
         -DWORKDIR=${CMAKE_CURRENT_BINARY_DIR}
         -DMODE=landmark -P ${_drv})
-    add_test(NAME threads_shared COMMAND ${CMAKE_COMMAND}
-        -DPRIOR_BUILD=$<TARGET_FILE:bcb-prior-build>
-        -DTEST_BIN=$<TARGET_FILE:test_threads> -DTEST_ARGS=8\;2000
-        -DCORPUS=${CMAKE_CURRENT_SOURCE_DIR}/tests/corpus/pride_and_prejudice.txt
-        -DWORKDIR=${CMAKE_CURRENT_BINARY_DIR}
-        -DMODE=landmark -P ${_drv})
-    # Make the shared lib discoverable at test time (Windows needs the DLL on PATH).
-    set_tests_properties(api_shared threads_shared PROPERTIES
+    # Windows DLL must be discoverable at test time.
+    set_tests_properties(api_shared PROPERTIES
         ENVIRONMENT "PATH=$<TARGET_FILE_DIR:bcb_shared>;$ENV{PATH}")
+
+    # The thread test uses POSIX <pthread.h> directly, so it is POSIX-only.
+    # (The library itself is thread-safe on every platform; only this test
+    # harness is pthread-based.)
+    if(NOT WIN32)
+      find_package(Threads)
+      add_executable(test_threads tests/test_threads.c)
+      target_include_directories(test_threads PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+      target_link_libraries(test_threads PRIVATE bcb_shared Threads::Threads)
+      add_test(NAME threads_shared COMMAND ${CMAKE_COMMAND}
+          -DPRIOR_BUILD=$<TARGET_FILE:bcb-prior-build>
+          -DTEST_BIN=$<TARGET_FILE:test_threads> -DTEST_ARGS=8\;2000
+          -DCORPUS=${CMAKE_CURRENT_SOURCE_DIR}/tests/corpus/pride_and_prejudice.txt
+          -DWORKDIR=${CMAKE_CURRENT_BINARY_DIR}
+          -DMODE=landmark -P ${_drv})
+      set_tests_properties(threads_shared PROPERTIES
+          ENVIRONMENT "LD_LIBRARY_PATH=$<TARGET_FILE_DIR:bcb_shared>:$ENV{LD_LIBRARY_PATH}")
+    endif()
   endif()
 endif()
 

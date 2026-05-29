@@ -2,7 +2,8 @@
  * Copyright (c) 2026 호시 <jahyag@gmail.com>
  * Proprietary — All Rights Reserved. See LICENSE.
  */
-/* aux.h — v4: 보조채널 (distribution blend 방식, 작업 항목 #4)
+/* aux_channel.h — v4: 보조채널 (distribution blend 방식, 작업 항목 #4)
+ * (파일명은 'aux' Windows 예약어 회피를 위해 aux_channel)
  *
  * v2(context mix) 가 bucket fragmentation 으로 폐기된 뒤 채택된 형태.
  * context 는 건드리지 않고, 별도 학습한 거시 통계 prior 를 BT 분포와 가중 blend 한다:

@@ -11,8 +11,8 @@ library to ship or `dlopen`).
 
 ## Install
 
-Wheels target Linux + macOS (the core currently uses POSIX `mmap`; a Windows
-`mmap` shim is tracked separately). Build a local wheel from the repository:
+Wheels target Linux + macOS + Windows (Windows uses the Win32 file-mapping shim
+in the core, not POSIX `mmap`). Build a local wheel from the repository:
 
 ```sh
 # from the repo root (the C sources must be present)

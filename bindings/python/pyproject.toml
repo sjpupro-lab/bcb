@@ -29,18 +29,19 @@ package-dir = { "" = "src" }
 packages = ["bcb"]
 
 # ── multi-platform wheels (cibuildwheel) ─────────────────────────────────────
-# The extension compiles the BCB core C sources, which currently use POSIX mmap,
-# so wheels target Linux + macOS. Windows needs an mmap shim for bcb_prior.c
-# (tracked separately). Build from the repo root so the C sources are present:
+# Linux + macOS + Windows. The Windows build uses the Win32 file-mapping shim in
+# bcb_prior.c (no POSIX mmap). In CI the C sources are vendored into
+# bindings/python/_csrc before cibuildwheel runs (cibuildwheel only mounts the
+# package dir); locally, build from the repo root so the sources are present:
 #   BCB_REPO_ROOT=$PWD python -m cibuildwheel --output-dir wheelhouse bindings/python
 [tool.cibuildwheel]
 build = "cp38-* cp39-* cp310-* cp311-* cp312-* cp313-*"
 skip = "*-musllinux_i686 *_i686"
 build-frontend = "build"
-test-requires = "pytest"
-# tests need the C toolchain + prior-build tool from the repo; run the binding's
-# own round-trip suite against a prior built from the bundled corpus.
-test-command = "pytest {project}/bindings/python/tests -q"
+# Smoke test: the wheel imports and the native extension loads on every platform
+# (incl. Windows). The full round-trip pytest needs a prior built by the C
+# toolchain and runs in regular CI, not in the isolated wheel test env.
+test-command = "python -c \"import bcb; print(bcb.version())\""
 
 [tool.cibuildwheel.linux]
 archs = ["x86_64", "aarch64"]
@@ -48,3 +49,6 @@ environment = { BCB_REPO_ROOT = "/project" }
 
 [tool.cibuildwheel.macos]
 archs = ["x86_64", "arm64"]
+
+[tool.cibuildwheel.windows]
+archs = ["AMD64"]
