@@ -16,6 +16,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libbrotli-dev libzstd-dev
 
+      - name: core -Wconversion gate (no implicit integer conversions)
+        run: make wconv
+
       - name: Round-trip test
         run: make test
 

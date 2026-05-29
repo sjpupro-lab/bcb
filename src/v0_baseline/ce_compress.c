@@ -129,7 +129,7 @@ CecDecoder *cec_dec_new(const uint8_t *data, size_t len, const CecBT *bt) {
     d->low = 0; d->high = 0xFFFFFFFFu;
     d->bt = bt;
     for (int i=0; i<32; i++)
-        d->code = (d->code << 1) | cec_read_bit_(d);
+        d->code = (d->code << 1) | (uint32_t)cec_read_bit_(d);
     return d;
 }
 
@@ -149,7 +149,7 @@ static void cec_renorm_dec_(CecDecoder *d) {
         } else break;
         d->low <<= 1;
         d->high = (d->high << 1) | 1;
-        d->code = (d->code << 1) | cec_read_bit_(d);
+        d->code = (d->code << 1) | (uint32_t)cec_read_bit_(d);
     }
 }
 

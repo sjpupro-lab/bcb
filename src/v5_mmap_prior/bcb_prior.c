@@ -290,12 +290,12 @@ int bcb_prior_save_with_landmarks(const char *path, int n, unsigned k) {
     qsort(refs, nlen, sizeof(CtxRef), cmp_ctxref);
     if (k > nlen) k = (unsigned)nlen;
 
-    unsigned char *lm_ctx = (unsigned char *)malloc((size_t)k * n + 1);
+    unsigned char *lm_ctx = (unsigned char *)malloc((size_t)k * (size_t)n + 1);
     uint16_t *lm_cum = (uint16_t *)malloc((size_t)k * 256 * sizeof(uint16_t) + 1);
     unsigned freq[256]; uint32_t cum[257];
     for (unsigned r = 0; r < k; r++) {
         bt_v3_ctx_at(refs[r].idx, ctx, &len, &total, freq);
-        memcpy(lm_ctx + (size_t)r * n, ctx, (size_t)n);
+        memcpy(lm_ctx + (size_t)r * (size_t)n, ctx, (size_t)n);
         bt_v3_set_window(ctx, n);
         bt_v3_distribution(cum, CEC_RC_SCALE);
         double P[256], sum = 0, tot = (double)total + LM_BACKOFF_W;
@@ -322,7 +322,7 @@ static void lm_build_index(BcbPrior *p) {
     p->lm_nslots = ns; p->lm_mask = ns - 1;
     for (unsigned long i = 0; i < ns; i++) p->lm_slot[i] = -1;
     for (unsigned k = 0; k < p->lm_k; k++) {
-        const unsigned char *c = p->lm_ctx + (size_t)k * p->lm_n;
+        const unsigned char *c = p->lm_ctx + (size_t)k * (size_t)p->lm_n;
         unsigned long h = hashN(c, p->lm_n) & p->lm_mask;
         while (p->lm_slot[h] >= 0) h = (h + 1) & p->lm_mask;
         p->lm_slot[h] = (int)k;
@@ -335,7 +335,7 @@ static int lm_lookup(const BcbPrior *p, const unsigned char *ctx) {
     for (;;) {
         int s = p->lm_slot[h];
         if (s < 0) return -1;
-        if (memcmp(p->lm_ctx + (size_t)s * p->lm_n, ctx, (size_t)p->lm_n) == 0) return s;
+        if (memcmp(p->lm_ctx + (size_t)s * (size_t)p->lm_n, ctx, (size_t)p->lm_n) == 0) return s;
         h = (h + 1) & p->lm_mask;
     }
 }
@@ -675,9 +675,9 @@ int bcb_prior_save_with_schema(const char *path, const unsigned char *corpus,
 
     for (size_t r = 0; r < nfit; r++)
         for (int pp = 0; pp < rec; pp++) {
-            unsigned char b = corpus[r*rec + pp];
+            unsigned char b = corpus[r*(size_t)rec + (size_t)pp];
             bf[pp][b] += 1.0;
-            if (r > 0) df[pp][(unsigned char)(b - corpus[(r-1)*rec + pp])] += 1.0;
+            if (r > 0) df[pp][(unsigned char)(b - corpus[(r-1)*(size_t)rec + (size_t)pp])] += 1.0;
         }
 
     unsigned char *modes = (unsigned char *)calloc((size_t)rec, 1);
@@ -688,9 +688,9 @@ int bcb_prior_save_with_schema(const char *path, const unsigned char *corpus,
         /* held-out mode 결정 */
         double vb = 0, vd = 0; size_t vstart = (nfit < nrec) ? nfit : 1, vn = 0;
         for (size_t r = vstart; r < nrec; r++) {
-            unsigned char b = corpus[r*rec + pp];
+            unsigned char b = corpus[r*(size_t)rec + (size_t)pp];
             vb += -log2((bf[pp][b] + LM_BACKOFF_W/256) / (totb + LM_BACKOFF_W));
-            unsigned char d = (unsigned char)(b - corpus[(r-1)*rec + pp]);
+            unsigned char d = (unsigned char)(b - corpus[(r-1)*(size_t)rec + (size_t)pp]);
             vd += -log2((df[pp][d] + LM_BACKOFF_W/256) / (totd + LM_BACKOFF_W));
             vn++;
         }
@@ -698,9 +698,9 @@ int bcb_prior_save_with_schema(const char *path, const unsigned char *corpus,
         modes[pp] = (unsigned char)use_delta;
         /* val 구간을 분포에 합산 (전체 train 으로 최종 분포) */
         for (size_t r = nfit; r < nrec; r++) {
-            unsigned char b = corpus[r*rec + pp];
+            unsigned char b = corpus[r*(size_t)rec + (size_t)pp];
             bf[pp][b] += 1.0;
-            if (r > 0) df[pp][(unsigned char)(b - corpus[(r-1)*rec + pp])] += 1.0;
+            if (r > 0) df[pp][(unsigned char)(b - corpus[(r-1)*(size_t)rec + (size_t)pp])] += 1.0;
         }
         double *src = use_delta ? df[pp] : bf[pp];
         double sum = 0; for (int b = 0; b < 256; b++) sum += src[b];

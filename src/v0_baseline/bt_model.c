@@ -37,14 +37,14 @@ static BtLevel LEVELS[BT_LEVELS_V4] = {
 static inline unsigned int fnv(const unsigned char *d, int n){unsigned int h=2166136261u;for(int i=0;i<n;i++){h^=d[i];h*=16777619u;}return h;}
 static inline CtxEntry* ctx_find_h(const unsigned char *ctx, int cl, unsigned int ch){
     int idx=g_ctx_buckets[ch&(CTX_BUCKETS-1)];
-    while(idx>=0){CtxEntry *e=&g_ctx_pool[idx];if(e->ctx_len==cl&&memcmp(e->ctx,ctx,cl)==0)return e;idx=e->chain;}
+    while(idx>=0){CtxEntry *e=&g_ctx_pool[idx];if(e->ctx_len==cl&&memcmp(e->ctx,ctx,(size_t)cl)==0)return e;idx=e->chain;}
     return NULL;
 }
 static inline CtxEntry* ctx_get_h(const unsigned char *ctx, int cl, unsigned int ch){
     CtxEntry *e=ctx_find_h(ctx,cl,ch); if(e)return e;
     if(g_ctx_used>=CTX_POOL)return NULL;
-    e=&g_ctx_pool[g_ctx_used];memcpy(e->ctx,ctx,cl);e->ctx_len=cl;e->total_freq=0;e->unique_next=0;
-    int b=ch&(CTX_BUCKETS-1); e->chain=g_ctx_buckets[b]; g_ctx_buckets[b]=g_ctx_used++;
+    e=&g_ctx_pool[g_ctx_used];memcpy(e->ctx,ctx,(size_t)cl);e->ctx_len=(unsigned char)cl;e->total_freq=0;e->unique_next=0;
+    int b=ch&(CTX_BUCKETS-1); e->chain=g_ctx_buckets[b]; g_ctx_buckets[b]=(int)g_ctx_used++;
     return e;
 }
 static inline void bloom_set(const unsigned char *ctx, int cl){
@@ -68,14 +68,14 @@ static void bt_update(const unsigned char *ctx, int cl, unsigned char next){
     int idx=g_table->buckets[nh];int is_new=1;
     while(idx>=0){
         BtEntry *e=&g_table->pool[idx];
-        if(e->ctx_len==cl&&e->next_byte==next&&memcmp(e->ctx,ctx,cl)==0){e->freq++;is_new=0;break;}
+        if(e->ctx_len==cl&&e->next_byte==next&&memcmp(e->ctx,ctx,(size_t)cl)==0){e->freq++;is_new=0;break;}
         idx=e->chain;
     }
     if(is_new){
         if(g_table->pool_used>=BT_POOL)return;
         BtEntry *e=&g_table->pool[g_table->pool_used];
-        memcpy(e->ctx,ctx,cl);e->ctx_len=cl;e->next_byte=next;e->freq=1;
-        e->chain=g_table->buckets[nh]; g_table->buckets[nh]=g_table->pool_used++;
+        memcpy(e->ctx,ctx,(size_t)cl);e->ctx_len=(unsigned char)cl;e->next_byte=next;e->freq=1;
+        e->chain=g_table->buckets[nh]; g_table->buckets[nh]=(int)g_table->pool_used++;
     }
     CtxEntry *cc=ctx_get_h(ctx,cl,ch);
     if(cc){cc->total_freq++;if(is_new)cc->unique_next++;}
@@ -118,7 +118,7 @@ static double predict_byte(unsigned char byte) {
             int idx = g_table->buckets[nh]; unsigned int af = 0;
             while (idx >= 0) {
                 BtEntry *e = &g_table->pool[idx];
-                if (e->ctx_len == n && e->next_byte == byte && memcmp(e->ctx, ctx, n) == 0) {
+                if (e->ctx_len == n && e->next_byte == byte && memcmp(e->ctx, ctx, (size_t)n) == 0) {
                     af = e->freq; break;
                 }
                 idx = e->chain;
@@ -141,7 +141,7 @@ void bt_v4_distribution(unsigned int *cum_out, unsigned int scale) {
     double probs[256];
     double s = 0;
     for (int b=0; b<256; b++) { probs[b] = predict_byte((unsigned char)b); s += probs[b]; }
-    if (s <= 0) { unsigned int w=scale/256; for(int b=0;b<256;b++)cum_out[b]=b*w; cum_out[256]=scale; return; }
+    if (s <= 0) { unsigned int w=scale/256; for(int b=0;b<256;b++)cum_out[b]=(unsigned int)b*w; cum_out[256]=scale; return; }
     double alpha=0.05, u=1.0/256.0;
     unsigned int acc = 0;
     for (int b=0; b<256; b++) {

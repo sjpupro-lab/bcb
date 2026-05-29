@@ -43,9 +43,20 @@ MSG_SIZES ?= 64,128,256,512,1024,2048,4096
 MSG_BYTES ?= 400000
 MSG_SAMPLES ?= 24
 
-.PHONY: all test bench clean msgbench msgbench-md msgbench-landmark msgbench-check prior prior-equiv prior-rss hpack hpack-docs landmark landmark-verify landmark-bench landmark-bench-docs structbench structural-bench structural-verify api-test threads-test
+.PHONY: all test bench clean msgbench msgbench-md msgbench-landmark msgbench-check prior prior-equiv prior-rss hpack hpack-docs landmark landmark-verify landmark-bench landmark-bench-docs structbench structural-bench structural-verify api-test threads-test wconv
 
 all: $(BUILD)/bcb-cli $(BUILD)/bcb-bench
+
+# 코어 -Wconversion 회귀 게이트: libbcb 코어 소스가 암묵적 정수 형변환 경고 0 을 유지하는지
+# -Werror 로 확인한다(오버플로·부호 손실·절단 회귀 차단). CI 에서 매 PR 실행.
+WCONV := -Wconversion -Werror
+wconv:
+	$(CC) $(CFLAGS) $(WCONV) $(V6_INC) $(V0_INC) $(V3_INC) $(V5_INC) -c $(V6_SRC) -o /dev/null
+	$(CC) $(CFLAGS) $(WCONV) $(V0_INC) -c $(V0_DIR)/ce_compress.c -o /dev/null
+	$(CC) $(CFLAGS) $(WCONV) $(V0_INC) -c $(V0_DIR)/bt_model.c -o /dev/null
+	$(CC) $(CFLAGS) $(WCONV) $(V3_INC) $(V0_INC) -c $(V3_DIR)/btv3.c -o /dev/null
+	$(CC) $(CFLAGS) $(WCONV) $(V5_INC) $(V3_INC) $(V0_INC) -c $(V5_DIR)/bcb_prior.c -o /dev/null
+	@echo "core: -Wconversion clean"
 
 $(BUILD):
 	mkdir -p $(BUILD)
