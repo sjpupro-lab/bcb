@@ -114,8 +114,8 @@ static int bt_grow(void){
     memset(g_bt_slot, -1, sizeof(int)*ns);
     for(unsigned long i=0;i<g_pool_used;i++){               /* rehash: index 는 불변 */
         BtEntry *e=&g_pool[i];
-        unsigned int h=((fnv(e->ctx,e->ctx_len)^e->next_byte)*16777619u)&g_bt_mask;
-        while(g_bt_slot[h]>=0) h=(h+1)&g_bt_mask;
+        unsigned int h=(unsigned int)(((fnv(e->ctx,e->ctx_len)^e->next_byte)*16777619u)&g_bt_mask);
+        while(g_bt_slot[h]>=0) h=(unsigned int)((h+1)&g_bt_mask);
         g_bt_slot[h]=(int)i;
     }
     return 0;
@@ -129,8 +129,8 @@ static int ctx_grow(void){
     memset(g_ctx_slot, -1, sizeof(int)*ns);
     for(unsigned long i=0;i<g_ctx_used;i++){
         CtxEntry *e=&g_ctx_pool[i];
-        unsigned int h=fnv(e->ctx,e->ctx_len)&g_ctx_mask;
-        while(g_ctx_slot[h]>=0) h=(h+1)&g_ctx_mask;
+        unsigned int h=(unsigned int)(fnv(e->ctx,e->ctx_len)&g_ctx_mask);
+        while(g_ctx_slot[h]>=0) h=(unsigned int)((h+1)&g_ctx_mask);
         g_ctx_slot[h]=(int)i;
     }
     return 0;
@@ -138,31 +138,31 @@ static int ctx_grow(void){
 
 /* ── CtxEntry open addressing ─────────────────────────────── */
 static inline CtxEntry* ctx_find_h(const unsigned char *ctx, int cl, unsigned int ch){
-    unsigned int h = ch & g_ctx_mask;
+    unsigned int h = (unsigned int)(ch & g_ctx_mask);
     for(;;){
         int s = g_ctx_slot[h];
         if(s < 0) return NULL;
         CtxEntry *e = &g_ctx_pool[s];
-        if(e->ctx_len==cl && memcmp(e->ctx,ctx,cl)==0) return e;
-        h = (h+1) & g_ctx_mask;
+        if(e->ctx_len==cl && memcmp(e->ctx,ctx,(size_t)cl)==0) return e;
+        h = (unsigned int)((h+1) & g_ctx_mask);
     }
 }
 static inline CtxEntry* ctx_get_h(const unsigned char *ctx, int cl, unsigned int ch){
     for(;;){
-        unsigned int h = ch & g_ctx_mask;
+        unsigned int h = (unsigned int)(ch & g_ctx_mask);
         for(;;){
             int s = g_ctx_slot[h];
             if(s < 0){
                 if(g_ctx_used >= g_ctx_cap){ if(ctx_grow()!=0) return NULL; break; } /* 성장 후 재탐사 */
                 int idx = (int)g_ctx_used;
                 CtxEntry *e = &g_ctx_pool[idx];
-                memcpy(e->ctx,ctx,cl); e->ctx_len=cl; e->total_freq=0; e->unique_next=0; e->first_entry=-1;
+                memcpy(e->ctx,ctx,(size_t)cl); e->ctx_len=(unsigned char)cl; e->total_freq=0; e->unique_next=0; e->first_entry=-1;
                 g_ctx_slot[h] = idx; g_ctx_used++;
                 return e;
             }
             CtxEntry *e = &g_ctx_pool[s];
-            if(e->ctx_len==cl && memcmp(e->ctx,ctx,cl)==0) return e;
-            h = (h+1) & g_ctx_mask;
+            if(e->ctx_len==cl && memcmp(e->ctx,ctx,(size_t)cl)==0) return e;
+            h = (unsigned int)((h+1) & g_ctx_mask);
         }
     }
 }
@@ -188,7 +188,7 @@ static void bt_update(const unsigned char *ctx, int cl, unsigned char next){
     unsigned int key = (ch ^ next) * 16777619u;
     int is_new; long new_idx = -1;
     for(;;){                                    /* 바깥: 성장 시 재탐사 */
-        unsigned int h = key & g_bt_mask;
+        unsigned int h = (unsigned int)(key & g_bt_mask);
         int done = 0;
         for(;;){
             int s = g_bt_slot[h];
@@ -196,13 +196,13 @@ static void bt_update(const unsigned char *ctx, int cl, unsigned char next){
                 if(g_pool_used >= g_pool_cap){ if(bt_grow()!=0) return; break; } /* 재탐사 */
                 new_idx = (long)g_pool_used;
                 BtEntry *e = &g_pool[new_idx];
-                memcpy(e->ctx,ctx,cl); e->ctx_len=cl; e->next_byte=next; e->freq=1; e->ctx_next=-1;
+                memcpy(e->ctx,ctx,(size_t)cl); e->ctx_len=(unsigned char)cl; e->next_byte=next; e->freq=1; e->ctx_next=-1;
                 g_bt_slot[h] = (int)new_idx; g_pool_used++;
                 is_new = 1; done = 1; break;
             }
             BtEntry *e = &g_pool[s];
-            if(e->ctx_len==cl && e->next_byte==next && memcmp(e->ctx,ctx,cl)==0){ e->freq++; is_new=0; done=1; break; }
-            h = (h+1) & g_bt_mask;
+            if(e->ctx_len==cl && e->next_byte==next && memcmp(e->ctx,ctx,(size_t)cl)==0){ e->freq++; is_new=0; done=1; break; }
+            h = (unsigned int)((h+1) & g_bt_mask);
         }
         if(done) break;
     }
@@ -246,7 +246,7 @@ static void build_luts(void){
     /* CONF_LOG2[i] = 20·log2(conf)·2^16, conf = (i+0.5)/PRES·256, clamp≥1.
      * conf 의 Q16 표현: conf_q16 = (i+0.5)/PRES·256·2^16 = (2i+1)·128·2^16/PRES.  */
     for(int i=0;i<PRES;i++){
-        uint64_t conf_q16 = ((uint64_t)(2*i+1) * 128ULL * (1u<<LOG2_FB)) / PRES;
+        uint64_t conf_q16 = ((uint64_t)(2*i+1) * (uint64_t)128 * (uint64_t)(1u<<LOG2_FB)) / (uint64_t)PRES;
         if(conf_q16 < (1u<<LOG2_FB)) conf_q16 = (1u<<LOG2_FB);   /* clamp conf≥1 */
         CONF_LOG2[i] = (int32_t)(CONF_EXP * log2_q16((uint32_t)conf_q16));
     }
@@ -333,13 +333,13 @@ int bt_v3_ctx_at(unsigned long i, unsigned char *ctx_out, int *len_out,
 /* reader 용 lookup (전역 미사용) */
 static inline const CtxEntry* ctx_find_rd(const BtV3Reader *r, const unsigned char *ctx, int cl, unsigned int ch){
     const CtxEntry *cpool = (const CtxEntry*)r->ctx_pool;
-    unsigned int h = ch & r->ctx_mask;
+    unsigned int h = (unsigned int)(ch & r->ctx_mask);
     for(;;){
         int s = r->ctx_slot[h];
         if(s < 0) return NULL;
         const CtxEntry *e = &cpool[s];
-        if(e->ctx_len==cl && memcmp(e->ctx,ctx,cl)==0) return e;
-        h = (h+1) & r->ctx_mask;
+        if(e->ctx_len==cl && memcmp(e->ctx,ctx,(size_t)cl)==0) return e;
+        h = (unsigned int)((h+1) & r->ctx_mask);
     }
 }
 static inline int bloom_chk_rd(const unsigned char *bloom, const unsigned char *ctx, int cl){
@@ -420,7 +420,7 @@ void bt_v3_distribution_r(const BtV3Reader *r, unsigned int *cum_out, unsigned i
     }
     int64_t s = 0;
     for (int b=0;b<256;b++) s += probs[b];
-    if (s <= 0) { unsigned int w=scale/256; for(int b=0;b<256;b++)cum_out[b]=b*w; cum_out[256]=scale; return; }
+    if (s <= 0) { unsigned int w=scale/256; for(int b=0;b<256;b++)cum_out[b]=(unsigned int)b*w; cum_out[256]=scale; return; }
     int64_t base_w = (50*(int64_t)scale)/(1000*256);
     unsigned int acc = 0;
     for (int b=0;b<256;b++) {

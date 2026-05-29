@@ -73,8 +73,8 @@ static ssize_t compress_core(BcbCodec *c, int crc_on, int id_on, const uint8_t *
     hn += varint_put(hdr + hn, (uint64_t)in_len);
     if (crc_on) {
         uint32_t cc = crc32_(in, in_len);
-        hdr[hn++] = cc & 0xFF; hdr[hn++] = (cc >> 8) & 0xFF;
-        hdr[hn++] = (cc >> 16) & 0xFF; hdr[hn++] = (cc >> 24) & 0xFF;
+        hdr[hn++] = (uint8_t)(cc & 0xFF); hdr[hn++] = (uint8_t)((cc >> 8) & 0xFF);
+        hdr[hn++] = (uint8_t)((cc >> 16) & 0xFF); hdr[hn++] = (uint8_t)((cc >> 24) & 0xFF);
     }
     if (id_on) {
         const unsigned char *id = bcb_codec_prior_id(c);
