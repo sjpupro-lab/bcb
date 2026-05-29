@@ -9,7 +9,7 @@
  * 모든 변형은 round-trip 무손실을 검증한다.
  */
 #include "ce_compress.h"
-#include "aux.h"
+#include "aux_channel.h"
 #include "btv3.h"
 #include <stdio.h>
 #include <stdlib.h>
