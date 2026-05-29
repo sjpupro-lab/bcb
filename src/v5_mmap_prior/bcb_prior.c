@@ -316,12 +316,58 @@ static int lm_lookup(const BcbPrior *p, const unsigned char *ctx) {
 
 /* base(>= len 바이트, 읽기전용 prior 이미지)에서 BcbPrior 의 포인터들을 채운다.
  * base 메모리는 호출자(또는 mmap/owned_buf)가 소유. 0 ok / -1 형식 오류(magic/version/size). */
+/* [off, off+nbytes) ⊆ [0, len) 인지 오버플로 안전하게 확인. */
+static int region_in_bounds(uint64_t off, uint64_t nbytes, uint64_t len) {
+    if (off > len) return 0;
+    if (nbytes > len - off) return 0;
+    return 1;
+}
+/* a*b (오버플로 시 0). 성공 시 *out 채우고 1. */
+static int mul_no_overflow(uint64_t a, uint64_t b, uint64_t *out) {
+    if (a != 0 && b > UINT64_MAX / a) return 0;
+    *out = a * b;
+    return 1;
+}
+
 static int prior_parse(BcbPrior *p, const void *base, size_t len) {
     if (len < sizeof(BcbpHeader)) return -1;
     const BcbpHeader *h = (const BcbpHeader *)base;
     if (memcmp(h->magic, BCBP_MAGIC, 4) != 0) return -1;
     if (h->version != BCBP_VERSION) return -1;
     if (h->file_size > len) return -1;
+
+    /* ── 신뢰 불가 prior: 선언된 모든 영역이 버퍼 안에 있는지 먼저 검증 ──
+     * 이전엔 magic/version/file_size 만 봤다. 그래서 헤더의 오프셋·크기·내부
+     * 인덱스가 버퍼를 벗어나도 통과해, decode 중 OOB read 가 발생했다(퍼징으로 발견:
+     * bloom_chk_rd heap-buffer-overflow). 영역 크기는 헤더가 선언한 entry_sz 기준으로
+     * 계산하고, entry_sz==compiled 여부는 아래 bt_v3_validate 가 별도 확인한다.
+     * 유효 prior 는 모든 검사를 통과하므로 동작·압축비 변화 없음. */
+    uint64_t L = (uint64_t)len, sz;
+    if (!region_in_bounds(h->off_window, h->bt_max_depth, L)) return -1;
+    if (!mul_no_overflow(h->pool_used, h->bt_entry_sz, &sz) ||
+        !region_in_bounds(h->off_pool, sz, L)) return -1;
+    if (!mul_no_overflow(h->ctx_used, h->ctx_entry_sz, &sz) ||
+        !region_in_bounds(h->off_ctx_pool, sz, L)) return -1;
+    if (!mul_no_overflow(h->ctx_nslots, (uint64_t)sizeof(int), &sz) ||
+        !region_in_bounds(h->off_ctx_slot, sz, L)) return -1;
+    if (!region_in_bounds(h->off_bloom, h->bloom_bytes, L)) return -1;
+    if (h->win_len < 0 || (uint64_t)h->win_len > h->bt_max_depth) return -1;
+    /* landmark (lm_k>0 일 때만): lm_n 범위 + 두 영역 in-bounds. */
+    if (h->lm_k > 0) {
+        if (h->lm_n < 1 || h->lm_n > (uint32_t)BCB_BT_MAX_DEPTH) return -1;
+        if (!mul_no_overflow(h->lm_k, h->lm_n, &sz) ||
+            !region_in_bounds(h->off_lm_ctx, sz, L)) return -1;
+        if (!mul_no_overflow(h->lm_k, 256u * sizeof(uint16_t), &sz) ||
+            !region_in_bounds(h->off_lm_cum, sz, L)) return -1;
+    }
+    /* schema (schema_rec>0 일 때만): pos==rec, 1..SCHEMA_MAX, 두 영역 in-bounds. */
+    if (h->schema_rec > 0) {
+        if (h->schema_pos != h->schema_rec || h->schema_rec > (uint32_t)SCHEMA_MAX) return -1;
+        if (!region_in_bounds(h->off_schema_modes, h->schema_pos, L)) return -1;
+        if (!mul_no_overflow(h->schema_pos, 256u * sizeof(uint16_t), &sz) ||
+            !region_in_bounds(h->off_schema_cum, sz, L)) return -1;
+    }
+
     const char *m = (const char *)base;
     p->snap.pool        = m + h->off_pool;     p->snap.pool_used  = h->pool_used;
     p->snap.ctx_pool    = m + h->off_ctx_pool; p->snap.ctx_used   = h->ctx_used;
@@ -331,6 +377,9 @@ static int prior_parse(BcbPrior *p, const void *base, size_t len) {
     p->snap.bt_entry_sz = h->bt_entry_sz; p->snap.ctx_entry_sz = h->ctx_entry_sz;
     p->snap.bt_max_depth = h->bt_max_depth; p->snap.bloom_bits = (unsigned)h->bloom_bits;
     p->snap.pres = h->pres;
+    /* 빌드 서명 + reader 가 따라가는 ctx_slot/ctx_pool/pool 인덱스·체인·탐색 종료성 검증.
+     * 위에서 영역 범위는 확인했으므로 여기서의 스캔은 버퍼 안에서만 읽는다. */
+    if (bt_v3_validate(&p->snap) != 0) return -1;
     p->lm_n = (int)h->lm_n; p->lm_k = (unsigned)h->lm_k;
     p->lm_ctx = (const unsigned char *)m + h->off_lm_ctx;
     p->lm_cum = (const uint16_t *)(m + h->off_lm_cum);

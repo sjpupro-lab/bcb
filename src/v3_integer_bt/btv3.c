@@ -496,6 +496,60 @@ void bt_v3_export(BtV3Snapshot *s){
     s->bt_max_depth=BT_MAX_DEPTH; s->bloom_bits=BLOOM_BITS; s->pres=PRES;
 }
 
+/* 신뢰 불가 prior 검증. caller(prior_parse)가 각 영역의 버퍼 범위는 이미 확인했다.
+ * 여기서는 reader 가 실제로 dereference 하는 인덱스/체인/탐색 종료성을 확인한다. */
+int bt_v3_validate(const BtV3Snapshot *s){
+    if(!s) return -1;
+    /* 빌드 서명: reader 는 컴파일된 stride(sizeof) 로 pool/ctx_pool 을 읽으므로 일치 필수. */
+    if(s->bt_entry_sz!=sizeof(BtEntry) || s->ctx_entry_sz!=sizeof(CtxEntry) ||
+       s->bt_max_depth!=BT_MAX_DEPTH || s->bloom_bits!=BLOOM_BITS ||
+       s->pres!=PRES || s->bloom_bytes!=BLOOM_BITS/8)
+        return -1;
+    unsigned long nslot = s->ctx_nslots, cu = s->ctx_used, pu = s->pool_used;
+    /* ctx_slot 은 mask=nslots-1 로 인덱싱(power-of-two 가정). 0 이면 ctx_slot[0] 이 OOB. */
+    if(nslot==0 || (nslot & (nslot-1))!=0) return -1;
+    const int *slot = (const int*)s->ctx_slot;
+    const CtxEntry *cp = (const CtxEntry*)s->ctx_pool;
+    const BtEntry  *pp = (const BtEntry*)s->pool;
+    if(!slot || (!cp && cu) || (!pp && pu)) return -1;
+    /* 슬롯 인덱스 범위 + 빈 슬롯 존재(선형탐사 종료 보장). 음수는 빈 슬롯으로 취급. */
+    int has_empty = 0;
+    for(unsigned long i=0;i<nslot;i++){
+        int v = slot[i];
+        if(v < 0){ has_empty = 1; continue; }
+        if((unsigned long)v >= cu) return -1;
+    }
+    if(!has_empty) return -1;                       /* 빈 슬롯 없음 → lookup 무한 루프 */
+    /* CtxEntry: ctx_len 범위 + first_entry 범위. */
+    for(unsigned long i=0;i<cu;i++){
+        if(cp[i].ctx_len > BT_MAX_DEPTH) return -1;
+        int fe = cp[i].first_entry;
+        if(fe >= 0 && (unsigned long)fe >= pu) return -1;
+    }
+    /* BtEntry: ctx_len 범위 + ctx_next 범위. */
+    for(unsigned long i=0;i<pu;i++){
+        if(pp[i].ctx_len > BT_MAX_DEPTH) return -1;
+        int nx = pp[i].ctx_next;
+        if(nx >= 0 && (unsigned long)nx >= pu) return -1;
+    }
+    /* next 체인 사이클/공유 검출: 유효 prior 는 각 pool 항목이 정확히 한 체인에 속한다.
+     * visited 가 두 번 찍히면 사이클(무한 루프) 또는 공유 → 거부. */
+    if(pu){
+        unsigned char *seen = (unsigned char*)calloc(pu,1);
+        if(!seen) return -1;                        /* 검증 불가 → 보수적 거부 */
+        for(unsigned long i=0;i<cu;i++){
+            int idx = cp[i].first_entry;
+            while(idx >= 0){
+                if((unsigned long)idx >= pu || seen[idx]){ free(seen); return -1; }
+                seen[idx] = 1;
+                idx = pp[idx].ctx_next;
+            }
+        }
+        free(seen);
+    }
+    return 0;
+}
+
 int bt_v3_attach(const BtV3Snapshot *s){
     if(!s) return -1;
     if(s->bt_entry_sz!=sizeof(BtEntry) || s->ctx_entry_sz!=sizeof(CtxEntry) ||

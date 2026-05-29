@@ -83,6 +83,9 @@ int bt_v3_ctx_at(unsigned long i, unsigned char *ctx_out, int *len_out,
                  unsigned *total_out, unsigned *freq256);
 void bt_v3_export(BtV3Snapshot *s);     /* 학습 후: 현재 globals 포인터/크기 채움 */
 int  bt_v3_attach(const BtV3Snapshot *s); /* globals 를 외부 읽기전용 버퍼로; freeze; 0 ok / -1 서명 불일치 */
+/* 신뢰 불가 prior 검증: 빌드 서명 + reader 가 dereference 하는 인덱스/체인/탐색 종료성.
+ * caller 가 각 영역의 버퍼 범위를 먼저 확인한 뒤 호출. 0 ok / -1 무효(거부). */
+int  bt_v3_validate(const BtV3Snapshot *s);
 void bt_v3_detach(void);                /* attach 해제 (외부 버퍼 free 안 함) */
 
 /* attach 된 prior 로 동작하는 CecBT (bt_v3_init 호출 안 함) */
