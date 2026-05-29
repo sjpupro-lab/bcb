@@ -1,0 +1,8 @@
+_csrc/
+build/
+dist/
+wheelhouse/
+*.egg-info/
+*.so
+__pycache__/
+.pytest_cache/
