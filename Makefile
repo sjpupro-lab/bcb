@@ -274,6 +274,10 @@ landmark-bench-docs: $(BUILD)/bcb-prior-build $(BUILD)/bcb-blockbench $(addprefi
 $(BUILD)/bcb-msgbench: tools/bcb-msgbench.c $(V0_SRC) $(V3_SRC) $(V5_SRC) | $(BUILD)
 	$(CC) $(CFLAGS) $(V0_INC) $(V3_INC) $(V5_INC) -o $@ $^ $(LDLIBS) $(MSGBENCH_LIBS)
 
+# real-data benchmark (message-boundary aware): BCB+lm/+struct vs brotli/zstd/gzip/zlib
+$(BUILD)/bcb-realbench: tools/bcb-realbench.c $(V0_SRC) $(V3_SRC) $(V5_SRC) | $(BUILD)
+	$(CC) $(CFLAGS) $(V0_INC) $(V3_INC) $(V5_INC) -o $@ $^ $(LDLIBS) $(MSGBENCH_LIBS) -lz
+
 # 시나리오별 합성 코퍼스 생성 (결정적, --seed 고정)
 $(BUILD)/corpus_%.bin: $(SCN)/%.py | $(BUILD)
 	python3 $< --bytes $(MSG_BYTES) > $@
