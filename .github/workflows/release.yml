@@ -1,0 +1,169 @@
+name: release
+
+# Tag-driven release: build per-platform library bundles + Python wheels, attach
+# an SBOM + Sigstore signatures + SHA-256 checksums, then publish to GitHub
+# Releases and (gated) PyPI. Publishing steps run only behind manual-approval
+# GitHub Environments — see docs/releases.md for the one-time repo setup.
+#
+# Trigger: push a tag like v0.2.0   (workflow_dispatch builds artifacts without publishing).
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # ── native library bundles (Linux + macOS) ──────────────────────────────────
+  # Windows native packaging awaits an mmap shim for src/v5_mmap_prior/bcb_prior.c
+  # (the core currently uses POSIX mmap); tracked separately.
+  build-native:
+    name: build ${{ matrix.name }}
+    permissions:
+      contents: read
+      id-token: write            # keyless cosign signing (Sigstore OIDC)
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, name: linux-x86_64 }
+          - { os: macos-latest,  name: macos-universal }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure + build (Release)
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --config Release -j
+
+      - name: Sanity tests
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Stage install tree
+        id: stage
+        shell: bash
+        run: |
+          ver="${GITHUB_REF_NAME#v}"; [ -n "$ver" ] || ver="0.0.0-dev"
+          name="bcb-${ver}-${{ matrix.name }}"
+          cmake --install build --prefix "staging/${name}"
+          cp LICENSE "staging/${name}/" || true
+          mkdir -p dist
+          tar -C staging -czf "dist/${name}.tar.gz" "${name}"
+          echo "name=${name}" >> "$GITHUB_OUTPUT"
+
+      - name: Generate SBOM (CycloneDX)
+        uses: anchore/sbom-action@v0
+        with:
+          path: staging/${{ steps.stage.outputs.name }}
+          format: cyclonedx-json
+          output-file: dist/${{ steps.stage.outputs.name }}.cdx.json
+          artifact-name: ${{ steps.stage.outputs.name }}.cdx.json
+
+      - name: Checksums
+        shell: bash
+        working-directory: dist
+        run: shasum -a 256 * > "${{ steps.stage.outputs.name }}.sha256"
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign artifacts (keyless / Sigstore)
+        shell: bash
+        working-directory: dist
+        run: |
+          for f in *.tar.gz *.cdx.json; do
+            cosign sign-blob --yes --output-signature "$f.sig" --output-certificate "$f.pem" "$f"
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-${{ matrix.name }}
+          path: dist/*
+          if-no-files-found: error
+
+  # ── Python wheels (Linux + macOS) ───────────────────────────────────────────
+  build-wheels:
+    name: wheels ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      # cibuildwheel only mounts the package dir; vendor the C sources into it so
+      # the build is self-contained (bcb_build.py uses _csrc when present).
+      - name: Vendor C sources into the binding
+        shell: bash
+        run: |
+          mkdir -p bindings/python/_csrc
+          cp include/bcb.h \
+             src/v0_baseline/ce_compress.c src/v0_baseline/ce_compress.h \
+             src/v0_baseline/bt_model.c    src/v0_baseline/bt_model.h \
+             src/v3_integer_bt/btv3.c      src/v3_integer_bt/btv3.h \
+             src/v5_mmap_prior/bcb_prior.c src/v5_mmap_prior/bcb_prior.h \
+             src/v6_public/bcb_api.c \
+             bindings/python/_csrc/
+
+      - name: Build wheels
+        uses: pypa/cibuildwheel@v2.21
+        with:
+          package-dir: bindings/python
+          output-dir: wheelhouse
+        env:
+          # _csrc is pre-populated, so vendoring finds it regardless of root.
+          BCB_REPO_ROOT: /project
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.os }}
+          path: wheelhouse/*.whl
+          if-no-files-found: error
+
+  # ── publish to GitHub Releases (manual-approval environment) ─────────────────
+  publish-release:
+    name: publish GitHub Release
+    needs: [build-native, build-wheels]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    environment: release          # configure required reviewers in repo settings
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+
+  # ── publish to PyPI (separate manual-approval environment) ───────────────────
+  publish-pypi:
+    name: publish to PyPI
+    needs: [build-wheels]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    environment: pypi             # configure required reviewers + trusted publishing
+    permissions:
+      id-token: write             # PyPI trusted publishing (OIDC)
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: wheels-*
+          path: dist
+          merge-multiple: true
+      - name: Publish
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist
+          # For a dry run, point at TestPyPI:
+          # repository-url: https://test.pypi.org/legacy/

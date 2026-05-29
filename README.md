@@ -168,6 +168,16 @@ landmark-verify, structural-verify, api-test, threads-test)을 검사한다.
 
 ---
 
+## 릴리즈 & 보안 / Releases & security
+
+태그(`vX.Y.Z`) push 시 `.github/workflows/release.yml` 이 플랫폼별 라이브러리 번들
+(정적·동적·헤더·CLI)과 Python wheel 을 빌드하고, 각 아티팩트에 **CycloneDX SBOM +
+Sigstore(cosign) 서명 + SHA-256 체크섬**을 붙여 GitHub Releases·PyPI 에 게시한다(게시는
+수동 승인 environment 게이트). 검증 방법은 [`SECURITY.md`](SECURITY.md), 절차·셋업은
+[`docs/releases.md`](docs/releases.md). 취약점 신고도 [`SECURITY.md`](SECURITY.md) 참고.
+
+---
+
 ## 개발 단계 / Versions
 
 | 단계 | 내용 | 결과 |
