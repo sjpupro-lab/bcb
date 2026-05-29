@@ -22,6 +22,14 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
   set(CMAKE_BUILD_TYPE Release CACHE STRING "" FORCE)
 endif()
 
+# MSVC: CMAKE_C_STANDARD 99 selects no flag (MSVC has no C99 mode), and the
+# default C mode rejects C99 features this codebase uses (mixed declarations,
+# `inline`, for-init declarations). Force C11 (a superset) so MSVC accepts the
+# C99 source unchanged, and silence the CRT fopen/strcpy deprecation warnings.
+if(MSVC)
+  add_compile_options(/std:c11 /D_CRT_SECURE_NO_WARNINGS)
+endif()
+
 option(BCB_BUILD_SHARED "Build shared library (libbcb.so/.dll/.dylib)" ON)
 option(BCB_BUILD_STATIC "Build static library (libbcb.a)" ON)
 option(BCB_BUILD_TOOLS  "Build CLI tools (bcb-cli, bcb-prior-build)" ON)
