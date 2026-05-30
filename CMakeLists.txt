@@ -79,7 +79,10 @@ if(BCB_BUILD_SHARED)
   set_target_properties(bcb_shared PROPERTIES
       C_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN ON
       VERSION ${PROJECT_VERSION} SOVERSION ${PROJECT_VERSION_MAJOR})
-  target_compile_definitions(bcb_shared PRIVATE BCB_BUILD)   # dllexport / visibility(default)
+  # BCB_SHARED is PUBLIC so consumers see dllimport; CMake auto-defines
+  # bcb_shared_EXPORTS only while building this target -> dllexport. The BCB_API
+  # macro (bcb.h / bcb_prior.h) keys off exactly these two symbols.
+  target_compile_definitions(bcb_shared PUBLIC BCB_SHARED)
   add_library(bcb::bcb ALIAS bcb_shared)
   list(APPEND BCB_INSTALL_TARGETS bcb_shared)
 endif()
@@ -87,8 +90,8 @@ endif()
 if(BCB_BUILD_STATIC)
   add_library(bcb_static STATIC ${BCB_CORE_SOURCES})
   _bcb_configure_lib(bcb_static)
-  # Consumers of the static lib must NOT see dllimport on Windows.
-  target_compile_definitions(bcb_static PUBLIC BCB_STATIC)
+  # No BCB_SHARED -> BCB_API expands to nothing (no dllimport/dllexport), correct
+  # for a static archive and its consumers on every platform.
   if(NOT TARGET bcb::bcb)
     add_library(bcb::bcb ALIAS bcb_static)
   endif()

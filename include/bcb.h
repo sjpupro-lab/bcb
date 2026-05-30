@@ -35,24 +35,25 @@
 #endif
 
 /* ── 심볼 가시성 / symbol visibility ──────────────────────────
- * 동적 라이브러리(.so/.dll/.dylib) 빌드 시 공개 API 만 export 하고 내부 심볼은 숨긴다.
- *   - 라이브러리(공유) 빌드: BCB_BUILD 정의 (CMake 가 설정) → export.
- *   - Windows 정적 라이브러리 소비자: BCB_STATIC 정의 (정적 타깃이 INTERFACE 로 전파).
- *   - 그 외(헤더만 포함하는 소비자): import (Windows) / 평문 (ELF/Mach-O). */
+ * 공유 라이브러리 빌드·소비 시에만 declspec/visibility 를 단다. 하나의 결정 로직:
+ *   - BCB_SHARED        : 공유 라이브러리를 빌드/소비 중 (CMake 가 PUBLIC 으로 설정).
+ *   - bcb_shared_EXPORTS: CMake 가 bcb_shared 타깃을 *빌드할 때만* 자동 정의 → dllexport.
+ *     그 외(소비자)는 dllimport. 정적 라이브러리·Makefile·직접 컴파일(BCB_SHARED 미정의)은
+ *     장식 없음. 선언부(bcb.h/bcb_prior.h)와 정의부가 모두 이 BCB_API 만 쓴다(declspec 하드코딩 금지). */
 #if defined(_WIN32) || defined(__CYGWIN__)
-  #if defined(BCB_STATIC)
-    #define BCB_API
-  #elif defined(BCB_BUILD)
-    #define BCB_API __declspec(dllexport)
+  #if defined(BCB_SHARED)
+    #if defined(bcb_shared_EXPORTS)
+      #define BCB_API __declspec(dllexport)
+    #else
+      #define BCB_API __declspec(dllimport)
+    #endif
   #else
-    #define BCB_API __declspec(dllimport)
+    #define BCB_API
   #endif
+#elif defined(BCB_SHARED) && defined(bcb_shared_EXPORTS)
+  #define BCB_API __attribute__((visibility("default")))
 #else
-  #if defined(BCB_BUILD)
-    #define BCB_API __attribute__((visibility("default")))
-  #else
-    #define BCB_API
-  #endif
+  #define BCB_API
 #endif
 
 #ifdef __cplusplus

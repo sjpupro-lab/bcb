@@ -25,19 +25,10 @@
   #include <sys/stat.h>
 #endif
 
-/* These two PUBLIC API functions (declared in bcb.h) are defined here rather than
- * in bcb_api.c. The shared library is built with hidden visibility, so they must
- * carry the export attribute to be visible in libbcb.so/.dll. BCB_BUILD is set
- * only by the CMake shared target; the Makefile build leaves this empty (no-op). */
-#if defined(BCB_BUILD)
-  #if defined(_WIN32) || defined(__CYGWIN__)
-    #define BCB_EXPORT __declspec(dllexport)
-  #else
-    #define BCB_EXPORT __attribute__((visibility("default")))
-  #endif
-#else
-  #define BCB_EXPORT
-#endif
+/* bcb_prior_close / bcb_prior_record_size are PUBLIC API defined here (not in
+ * bcb_api.c). Their export decoration comes from the single BCB_API macro in
+ * bcb_prior.h (same logic as bcb.h) — no hardcoded __declspec here, so the
+ * declaration (bcb_prior.h) and definition use identical linkage. */
 
 #define BCBP_MAGIC   "BCBP"
 #define BCBP_VERSION 3u
@@ -474,10 +465,10 @@ BcbPrior *bcb_prior_from_buffer(const void *data, size_t len) {
     return p;
 }
 
-BCB_EXPORT int bcb_prior_record_size(const BcbPrior *p) { return p ? p->schema_rec : 0; }
+BCB_API int bcb_prior_record_size(const BcbPrior *p) { return p ? p->schema_rec : 0; }
 size_t bcb_prior_map_len(const BcbPrior *p) { return p ? p->map_len : 0; }
 
-BCB_EXPORT void bcb_prior_close(BcbPrior *p) {
+BCB_API void bcb_prior_close(BcbPrior *p) {
     if (!p) return;
     bt_v3_detach();
     free(p->lm_slot);
