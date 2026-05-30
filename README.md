@@ -67,6 +67,37 @@ gzip/zstd/brotli 는 이런 작은 binary 레코드에서 ~0.95×(오히려 키�
 
 cold-start 에서 BCB 5.87× vs HPACK 1.99× (≈3× 우위). warm 반복 request 는 HPACK 동적 테이블이 이김.
 
+### 재현 / Reproduce (외부 검증용)
+
+위 표는 모두 이 레포의 `make` 타깃으로 그대로 재현된다. generator 는 seed 고정이라 같은
+환경에서 **결정적**이며, 매 PR 마다 CI(`.github/workflows/msgbench.yml`, `ubuntu-latest`)가
+같은 명령으로 회귀·무손실을 검증한다.
+
+```sh
+# 1) 환경 / Environment
+#    C99 컴파일러(gcc/clang), make. 작은 메시지 벤치는 brotli/zstd dev 라이브러리 필요.
+#    Debian/Ubuntu:
+sudo apt-get install -y build-essential libbrotli-dev libzstd-dev
+cc --version          # 툴체인 기록 (예: gcc 13.x x86_64-linux-gnu)
+dpkg -s libbrotli-dev libzstd-dev | grep -E '^(Package|Version)'   # 비교 코덱 버전 기록
+
+# 2) 표 재현 / Reproduce each table
+make msgbench-landmark   # "작은 메시지" 표 (BCB / BCB+lm / brotli+dict / zstd+dict)
+make structural-bench    # "고정 레코드 binary" 표 (base vs structural)
+make hpack               # "HPACK" 표 (cold-start BCB vs HPACK; tools/bcb_vs_hpack.py)
+
+# 3) 결과 로그 저장 / Capture machine-readable result logs
+make msgbench-md | tee docs/benchmarks_run.md         # 같은 측정의 markdown 표
+make structural-bench 2>&1 | tee structural_run.log
+```
+
+측정 방법(공유 prior 구성, 코어 출력 바이트 정의, train-size·samples·message-sizes,
+무손실 검증)은 [`docs/benchmarks.md`](docs/benchmarks.md) 에 전부 명시했고, landmark·structural·
+HPACK 의 세부 수치와 한계는 각각 [`docs/landmark.md`](docs/landmark.md),
+[`docs/structural.md`](docs/structural.md), [`docs/hpack_comparison.md`](docs/hpack_comparison.md)
+에 실측과 병기했다. 절대 압축비는 툴체인·코덱 버전·코퍼스 배치에 따라 소폭 달라질 수 있으니,
+인용 시 위 환경 기록(컴파일러·brotli/zstd 버전·OS)을 함께 남길 것.
+
 ---
 
 ## 라이브러리 / Library API (`include/bcb.h`)

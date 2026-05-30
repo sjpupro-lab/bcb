@@ -22,7 +22,12 @@ BCB_REPO_ROOT="$PWD" pip wheel ./bindings/python -w dist/
 ```
 
 Multi-platform wheels are configured with `cibuildwheel` (see `pyproject.toml`).
-Upload to (Test)PyPI is intentionally **not** wired up yet.
+PyPI publishing is wired up in the release workflow
+(`.github/workflows/release.yml`, `publish-pypi` job, via PyPI trusted
+publishing / OIDC) but runs **only** on a `vX.Y.Z` tag and **only** behind a
+manual-approval GitHub Environment (`pypi`) — so nothing is uploaded
+automatically. For a dry run, point the publish step at TestPyPI. Until a
+release is approved, no wheels are on (Test)PyPI; build locally as above.
 
 ## Usage
 
