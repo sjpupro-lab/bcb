@@ -19,6 +19,28 @@
 #include "ce_compress.h"
 #include <stdint.h>
 
+/* bcb_prior_close / bcb_prior_record_size 는 공개 API(bcb.h)이면서 여기서 정의된다.
+ * 공유 라이브러리에서 export 되려면 선언·정의가 동일한 BCB_API 로 장식돼야 한다.
+ * bcb.h 가 먼저 포함됐으면 그 BCB_API 를 그대로 쓰고(동일 로직), 아니면 여기서 같은
+ * 로직으로 정의한다 — 두 헤더가 같은 심볼을 같은 linkage 로 선언하도록 보장(C2375 방지). */
+#ifndef BCB_API
+  #if defined(_WIN32) || defined(__CYGWIN__)
+    #if defined(BCB_SHARED)
+      #if defined(bcb_shared_EXPORTS)
+        #define BCB_API __declspec(dllexport)
+      #else
+        #define BCB_API __declspec(dllimport)
+      #endif
+    #else
+      #define BCB_API
+    #endif
+  #elif defined(BCB_SHARED) && defined(bcb_shared_EXPORTS)
+    #define BCB_API __attribute__((visibility("default")))
+  #else
+    #define BCB_API
+  #endif
+#endif
+
 #ifndef BCB_PRIOR_TYPE_DEFINED
 #define BCB_PRIOR_TYPE_DEFINED
 typedef struct BcbPrior BcbPrior;
@@ -60,7 +82,7 @@ size_t bcb_prior_map_len(const BcbPrior *p);
 const unsigned char *bcb_prior_id_bytes(const BcbPrior *p);
 
 /* mmap 해제 + 핸들 free. */
-void bcb_prior_close(BcbPrior *p);
+BCB_API void bcb_prior_close(BcbPrior *p);
 
 /* btv3 를 이 prior 에 attach (frozen 읽기전용). 0 ok / -1 빌드 서명 불일치. */
 int bcb_prior_attach(BcbPrior *p);
@@ -85,6 +107,6 @@ CecBT     bcb_codec_cec_bt(BcbCodec *c);  /* 이 codec 에 묶인 CecBT (전역 
 const unsigned char *bcb_codec_prior_id(const BcbCodec *c);  /* codec 의 prior id (16B) */
 
 /* prior 가 record schema 를 가지면 record_size(>0), 없으면 0. */
-int bcb_prior_record_size(const BcbPrior *p);
+BCB_API int bcb_prior_record_size(const BcbPrior *p);
 
 #endif /* BCB_PRIOR_H */
