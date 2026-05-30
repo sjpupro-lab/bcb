@@ -92,6 +92,14 @@ if(BCB_BUILD_STATIC)
   _bcb_configure_lib(bcb_static)
   # No BCB_SHARED -> BCB_API expands to nothing (no dllimport/dllexport), correct
   # for a static archive and its consumers on every platform.
+  # On Windows the static archive and the shared lib's *import* library would both
+  # be "bcb.lib" (same OUTPUT_NAME) and collide in the same dir — the import lib
+  # (only the public API) would clobber the static archive, breaking targets that
+  # link internal symbols (e.g. test_roundtrip -> cec_*: LNK2019). Give the static
+  # archive a distinct name on Windows. Unix is unaffected (libbcb.a vs libbcb.so).
+  if(WIN32 AND BCB_BUILD_SHARED)
+    set_target_properties(bcb_static PROPERTIES OUTPUT_NAME bcb-static)
+  endif()
   if(NOT TARGET bcb::bcb)
     add_library(bcb::bcb ALIAS bcb_static)
   endif()
