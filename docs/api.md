@@ -1,4 +1,4 @@
-# BCB Public Library API v1.0 (`include/bcb.h`)
+# BCB Public Library API v0.2.0 (`include/bcb.h`)
 
 BCB 를 호시 시스템의 *컴포넌트* 로 쓰기 위한 안정 C API. 정적 라이브러리 `build/libbcb.a`
 + 헤더 `include/bcb.h` 만으로 링크된다 (내부 v0/v3/v5 헤더 불필요). 검증: `make api-test`.
@@ -36,7 +36,7 @@ BcbEncoder *bcb_encoder_new(BcbPrior*);  ssize_t bcb_encode(BcbEncoder*, ...);  
 BcbDecoder *bcb_decoder_new(BcbPrior*);  ssize_t bcb_decode(BcbDecoder*, ...);  void bcb_decoder_free(BcbDecoder*);
 
 /* 잡 */
-const char *bcb_strerror(BcbStatus); const char *bcb_version(void);  /* "1.0.0" */
+const char *bcb_strerror(BcbStatus); const char *bcb_version(void);  /* "0.2.0" */
 ```
 
 상태 코드: `BCB_OK(0)`, `BCB_ERR_INVALID_PRIOR(-1)`, `BCB_ERR_OUTPUT_TOO_SMALL(-2)`,
