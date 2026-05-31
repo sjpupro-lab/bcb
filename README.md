@@ -1,285 +1,214 @@
-# BCB — Small-Message & Structured-Binary Lossless Compression
+# BCB — Binary Compression by BT
 
-**공유 prior 를 가진 작은 메시지·고정 레코드 binary 를 위한 무손실 압축기.**
-학습된 BT prior + range coder, 전 구간 정수(MCU 대응), 안정 C 라이브러리 API.
-A lossless compressor for **small messages and fixed-layout binary records** that share a
-learned prior. All-integer / libm-free core, embeddable stable C API.
+**Lossless compression for small messages and bit-packed binary records that share a learned prior.**
+All-integer / libm-free core (runs on MCUs), stable embeddable C API.
 
-Author: 호시 <jahyag@gmail.com> · Org: sjpupro-lab · License: Proprietary (All Rights Reserved) · API v0.2
+> **Bit-packing removes layout waste. BCB removes probability waste.**
+> 비트패킹은 *칸 낭비*를 줄이고, BCB는 *확률 낭비*를 줄인다.
 
----
+Author: 호시 <[jahyag@gmail.com](mailto:jahyag@gmail.com)> · Org: sjpupro-lab · License: **Proprietary (All Rights Reserved)** · API **v0.2.0**
 
-## 한 줄 요약 / TL;DR
+-----
 
-인코더와 디코더가 **같은 학습된 prior** 를 공유하고, 각 메시지를 그 prior 기준의 **한 점
-(range coder 정수)** 으로 보낸다. prior 자체는 전송하지 않는다(양쪽이 보유). 작은 메시지·정형
-binary 처럼 **공유 가능한 구조**가 있을 때 LZ(brotli/zstd)+dict 를 능가한다.
+## What it is
 
-Encoder and decoder share a learned prior; each message is sent as a point in that space. The
-prior is never transmitted. Where a *shared structure* exists (small messages, fixed binary
-records), BCB beats brotli/zstd + dictionary.
+General-purpose LZ compressors (zlib, LZ4, brotli, zstd, LZMA/emCompress) find redundancy *inside each
+block*. On a 32–256 byte message there is almost none, so they break even or **inflate**. BCB takes the
+opposite approach: encoder and decoder share a **pre-trained, frozen prior** (a learned model of the data,
+never transmitted), and each message is range-coded against it. Where messages share structure — IoT
+telemetry, industrial protocols, bit-packed game packets, HTTP headers — BCB compresses what LZ cannot.
 
----
+작은 메시지엔 블록 내부 중복이 거의 없어 LZ 계열은 손익분기이거나 오히려 커진다. BCB는 인코더·디코더가
+**미리 학습해 양쪽이 보유한 prior**(전송 안 함)에 각 메시지를 한 점으로 부호화한다. 공유 가능한 구조가
+있는 데이터에서 LZ가 못 짜는 것을 짠다.
 
-## 언제 쓰나 / When to use
+-----
 
-- ✅ **작은 메시지**(≤~512B): HTTP 헤더, MQTT/CoAP/gRPC, syslog, 푸시 알림, RPC. (`docs/benchmarks.md`)
-- ✅ **고정 레코드 binary**: IoT 텔레메트리, Modbus, CAN 등. (`docs/structural.md`)
-- ✅ 인코더·디코더가 **같은 prior 를 공유**할 수 있는 환경 (양쪽이 prior 파일 보유).
-- ❌ **~1–2KB 이상**의 일반 데이터 → brotli/zstd 가 더 빠르고 더 잘 압축한다 (LZ77 long-range).
-- ❌ prior 공유 불가·일회성·랜덤 데이터.
+## When to use / when not
 
----
+**Use it for**
 
-## 결과 / Results
+- Small structured packets (~20–512 B): IoT/sensor telemetry, Modbus, CAN, MQTT/CoAP, RPC, syslog, HTTP headers.
+- **Already bit-packed** binary where field *values* are skewed (most deltas ≈ 0, enums dominated by 1–2 values).
+- Environments where both ends can hold a shared prior, including small MCUs (ESP32 / RP2040).
 
-### 작은 메시지 (text-like) — `make msgbench-landmark`
+**Don’t use it for**
 
-train 50K, samples 24, 코어 코덱 출력 바이트, round-trip 무손실. **BCB+lm** = landmark prior.
+- Data above ~1–2 KB → brotli/zstd/LZMA win via long-range matching.
+- A single field below ~20 B → too small for *any* codec to help.
+- Random, encrypted, or already-compressed data, or any case with no shareable prior (Shannon).
 
-| 시나리오 | 크기 | BCB | **BCB+lm** | brotli+dict | zstd+dict | winner |
-|---|---|---|---|---|---|---|
-| MQTT | 64B | 4.03× | **4.60×** | 2.24× | 2.10× | BCB+lm |
-| RPC | 64B | 3.49× | **4.00×** | 1.91× | 2.08× | BCB+lm |
-| syslog | 64B | 3.18× | **3.44×** | 1.95× | 1.72× | BCB+lm |
-| HTTP 헤더 | 256B | 5.96× | **8.52×** | 7.98× | 6.98× | BCB+lm |
-| MQTT | 1024B | 4.42× | **5.16×** | 4.93× | 4.80× | BCB+lm |
-| IoT 패킷 | 64B | **1.54×** | 1.54× | 0.95× | 0.98× | BCB |
+-----
 
-작을수록 BCB 우위↑. landmark 가 LZ 를 넘는 상한을 넓힌다(HTTP ~256B, MQTT/RPC ~1KB). 그 이상은
-brotli/zstd 가 이긴다(정직하게: `docs/benchmarks.md`, `docs/landmark.md`).
+## Results
 
-### 고정 레코드 binary (structural) — `make structural-bench`
+All BCB numbers are round-trip lossless and reproducible from this repo (seed-fixed; CI re-runs them on
+every change). Toolchain of record: **gcc 13.3.0 · libbrotli 1.1.0 · libzstd 1.5.5 · hpack 4.1.0 ·
+Ubuntu 24.04 · x86_64.** Absolute ratios shift with corpus, skew, and codec versions.
 
-position-aware schema(자리별 byte/delta 분포)로 압축. 실제 코딩 바이트, 전부 무손실:
+### Real public sensor data (Intel Berkeley Lab), per-packet
 
-| 시나리오 | base | **structural** | 이득 |
-|---|---|---|---|
-| binary_record (32B) | 1.39× | **5.35×** | +286% |
-| per-device IoT (18B) | 1.28× | **3.99×** | +211% |
-| Modbus (25B) | 1.44× | **3.67×** | +154% |
-| CAN (16B) | 2.49× | **3.91×** | +57% |
+Each packet compressed independently (true edge behavior). Best LZ rival shown = zlib+dict.
 
-gzip/zstd/brotli 는 이런 작은 binary 레코드에서 ~0.95×(오히려 키움). IoT 는 **per-device 스트림**에서
-도약하고 다중 device interleave 공유 게이트웨이는 ~2× (`docs/structural_landmark.md`).
+|integer telemetry|BCB+struct|zlib+dict|brotli+dict|zstd+dict   |
+|-----------------|----------|---------|-----------|------------|
+|20 B (2 readings)|**1.30×** |1.16×    |0.83×      |0.70×       |
+|40 B (4)         |**2.05×** |1.61×    |0.99×      |0.95×       |
+|80 B (8)         |**2.73×** |2.03×    |1.40×      |1.38×       |
+|float32, 88 B (4)|**2.20×** |1.86×    |1.29×      |1.60× (zstd)|
 
-### HPACK (HTTP/2 헤더) — `docs/hpack_comparison.md`
+Below ~20 B every codec inflates — that band is out of scope for all of them, not a contest.
 
-cold-start 에서 BCB 5.87× vs HPACK 1.99× (≈3× 우위). warm 반복 request 는 HPACK 동적 테이블이 이김.
+### Already bit-packed game-style packets, per-packet
 
-### 재현 / Reproduce (외부 검증용)
+63 B packet, 7 entities, **no padding**, sub-byte fields (flags, 3-bit enums, 8/11-bit position & angle
+deltas) with realistic skew. Not wasteful JSON — a hand-optimized binary packet.
 
-위 표는 모두 이 레포의 `make` 타깃으로 그대로 재현된다. generator 는 seed 고정이라 같은
-환경에서 **결정적**이며, 매 PR 마다 CI(`.github/workflows/msgbench.yml`, `ubuntu-latest`)가
-같은 명령으로 회귀·무손실을 검증한다.
+|63 B bit-packed       |ratio        |                    |
+|----------------------|-------------|--------------------|
+|**BCB + structural**  |**2.20×**    |beats every LZ codec|
+|zlib + dict           |1.28×        |                    |
+|brotli + dict         |1.00×        |no gain             |
+|zstd + dict           |0.92×        |inflates            |
+|*control: random 64 B*|BCB **0.99×**|no false gain       |
+
+Tight bit-packing fixes field *widths*; it leaves the skewed *value* distribution untouched. BCB reclaims
+that. On random data it correctly does nothing.
+
+### Small text-like messages (synthetic, `make msgbench-landmark`)
+
+|scenario    |size |BCB+landmark|brotli+dict|zstd+dict|
+|------------|-----|------------|-----------|---------|
+|HTTP headers|256 B|**8.52×**   |7.98×      |6.98×    |
+|MQTT        |64 B |**4.60×**   |2.24×      |2.10×    |
+|RPC         |64 B |**4.00×**   |1.91×      |2.08×    |
+|syslog      |64 B |**3.44×**   |1.95×      |1.72×    |
+
+### Fixed-record binary (synthetic, `make structural-bench`)
+
+binary_record 32 B **5.35×** · IoT 18 B **3.99×** · Modbus 25 B **3.67×** · CAN 16 B **3.91×** —
+LZ family ~0.95× (inflates) on these.
+
+### vs HPACK (RFC 7541), identical header blocks
+
+|header set           |BCB (stateless)|HPACK cold|HPACK warm|
+|---------------------|---------------|----------|----------|
+|all (2825, avg 295 B)|5.87×          |1.99×     |**6.58×** |
+|request              |6.73×          |1.88×     |**11.12×**|
+|response             |**4.70×**      |2.23×     |3.67×     |
+
+BCB wins HPACK cold-start ~3× (CDN / stateless / first request). HPACK *warm* (long-lived connection,
+populated dynamic table) wins repeated requests; BCB still wins responses.
+
+### Reproduce
 
 ```sh
-# 1) 환경 / Environment
-#    C99 컴파일러(gcc/clang), make. 작은 메시지 벤치는 brotli/zstd dev 라이브러리 필요.
-#    Debian/Ubuntu:
 sudo apt-get install -y build-essential libbrotli-dev libzstd-dev
-cc --version          # 툴체인 기록 (예: gcc 13.x x86_64-linux-gnu)
-dpkg -s libbrotli-dev libzstd-dev | grep -E '^(Package|Version)'   # 비교 코덱 버전 기록
-
-# 2) 표 재현 / Reproduce each table
-make msgbench-landmark   # "작은 메시지" 표 (BCB / BCB+lm / brotli+dict / zstd+dict)
-make structural-bench    # "고정 레코드 binary" 표 (base vs structural)
-make hpack               # "HPACK" 표 (cold-start BCB vs HPACK; tools/bcb_vs_hpack.py)
-
-# 3) 결과 로그 저장 / Capture machine-readable result logs
-make msgbench-md | tee docs/benchmarks_run.md         # 같은 측정의 markdown 표
-make structural-bench 2>&1 | tee structural_run.log
+make msgbench-landmark      # small text-like messages
+make structural-bench       # fixed-record binary
+python3 tools/bcb_vs_hpack.py --bcb-build build      # vs HPACK
+sh tests/corpus/fetch_iot_real.sh && \
+  build/bcb-realbench --corpus build/real_iot_int.corpus --record-size 10 \
+    --recs-per-msg 8 --train-msgs 9000 --max-test 5000 --mode structural   # real sensor data
 ```
 
-측정 방법(공유 prior 구성, 코어 출력 바이트 정의, train-size·samples·message-sizes,
-무손실 검증)은 [`docs/benchmarks.md`](docs/benchmarks.md) 에 전부 명시했고, landmark·structural·
-HPACK 의 세부 수치와 한계는 각각 [`docs/landmark.md`](docs/landmark.md),
-[`docs/structural.md`](docs/structural.md), [`docs/hpack_comparison.md`](docs/hpack_comparison.md)
-에 실측과 병기했다. 절대 압축비는 툴체인·코덱 버전·코퍼스 배치에 따라 소폭 달라질 수 있으니,
-인용 시 위 환경 기록(컴파일러·brotli/zstd 버전·OS)을 함께 남길 것.
+Methodology (shared-prior setup, byte definition, train/sample sizes, lossless checks) is in
+[`docs/benchmarks.md`](docs/benchmarks.md) and [`docs/benchmarks_real.md`](docs/benchmarks_real.md).
 
----
+-----
 
-## 라이브러리 / Library API (`include/bcb.h`)
+## Where this sits vs Oodle Network / SEGGER emCompress
 
-```sh
-make build/libbcb.a
-cc -Iinclude my_app.c build/libbcb.a -lm -o my_app
-```
+- **emCompress** is the LZ family (LZMA/DEFLATE/LZ4); it builds its model *from within each block*, so it
+  inflates on small per-packet records — exactly the band BCB targets.
+- **Oodle Network** shares BCB’s paradigm (a pre-trained model held on both ends) but targets game servers
+  with a 4–8 MB model; it is not an MCU library and has no fixed-record schema. We make **no same-data
+  claim against Oodle** — that is best settled by running both on your own captures during evaluation.
 
-#### CMake (정적·동적 라이브러리, install, find_package) / cross-platform
+Full analysis: [`docs/compare.md`](docs/compare.md).
 
-Linux·macOS·Windows(MinGW) 공통. 정적(`libbcb.a`)·동적(`libbcb.so`/`.dll`/`.dylib`)
-라이브러리를 모두 빌드하며, 동적 라이브러리는 **공개 API(`include/bcb.h`)만 export**한다.
+-----
 
-```sh
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build
-ctest --test-dir build --output-on-failure        # 동적 라이브러리 round-trip 무손실 검증 포함
-cmake --install build --prefix /usr/local
-```
-
-설치 후 다른 프로젝트에서:
-
-```cmake
-find_package(bcb REQUIRED)          # bcb::bcb (동적; 정적만 빌드 시 정적)
-target_link_libraries(app PRIVATE bcb::bcb)
-```
-```sh
-cc my_app.c $(pkg-config --cflags --libs bcb) -o my_app   # pkg-config 도 제공
-```
-
-옵션: `-DBCB_BUILD_SHARED=OFF` / `-DBCB_BUILD_STATIC=OFF` / `-DBCB_BUILD_TOOLS=OFF`
-/ `-DBCB_BUILD_TESTS=OFF`. Windows(MinGW/PowerShell): `cmake -G "MinGW Makefiles" ...`.
-정적 라이브러리를 Windows 에서 링크할 땐 소비자에 `BCB_STATIC` 가 자동 전파된다.
-
-#### Python 바인딩 / Python bindings (`bindings/python/`)
-
-cffi 로 C 코어를 직접 컴파일한 자체 완결 확장. 설치·사용·API 는 `bindings/python/README.md`.
-
-```python
-import bcb
-with bcb.Prior("sensors.bcb-prior") as p:        # 컨텍스트 매니저
-    comp = p.compress(b"...packet...")           # checksum/prior_id 토글
-    back = p.decompress(comp, original_len=n)     # BcbError 예외 매핑
-```
+## Library / API (`include/bcb.h`)
 
 ```c
 #include "bcb.h"
-BcbPrior *p = bcb_prior_open("sensors.bcb-prior");        /* mmap; 또는 _from_memory */
-uint8_t out[/* >= */ 0]; size_t cap = bcb_compress_bound(msg_len);
-/* ... out 을 cap 크기로 확보 ... */
-ssize_t n = bcb_compress(p, msg, msg_len, out, cap);      /* 자기 기술적 컨테이너 */
-ssize_t m = bcb_decompress(p, out, (size_t)n, back, msg_len);   /* m==msg_len, 무손실 */
+BcbPrior *p = bcb_prior_open("sensors.bcb-prior");        /* mmap; or _from_memory */
+size_t cap = bcb_compress_bound(msg_len);                 /* allocate out[cap] */
+ssize_t n  = bcb_compress(p, msg, msg_len, out, cap);     /* self-describing container */
+ssize_t m  = bcb_decompress(p, out, (size_t)n, back, msg_len);   /* m == msg_len, lossless */
 bcb_prior_close(p);
 ```
 
-- one-shot + `BcbEncoder`/`BcbDecoder` 핸들, `bcb_compress_bound`, `bcb_prior_id`,
-  `bcb_strerror`/`bcb_version`, `BcbStatus` 에러 코드.
-- **스레드 안전**: 핸들마다 인스턴스 상태; prior·LUT 읽기 전용 공유(같은 prior 동시 사용 가능).
-  `make threads-test` 8스레드 동시 무손실.
-- **CRC32 무결성**(기본 on) → 손상 시 `BCB_ERR_CORRUPTED`. `bcb_encoder_set_checksum` 으로 off.
-- **prior id**(SHA-256 앞 16B): `bcb_encoder_set_prior_id` 로 압축본에 박으면 디코더가 prior
-  불일치를 `BCB_ERR_PRIOR_ID_MISMATCH` 로 즉시 잡는다.
-
-전체 레퍼런스·계약·한계: `docs/api.md`.
-
-### CLI / prior 빌드
+- One-shot + `BcbEncoder`/`BcbDecoder` handles; `bcb_compress_bound`, `bcb_prior_id`, `bcb_strerror`, `bcb_version`.
+- **Thread-safe:** per-handle state; priors/LUTs shared read-only (same prior usable concurrently).
+- **CRC32 integrity** (default on) → `BCB_ERR_CORRUPTED`; **prior-id** (SHA-256/16 B) catches prior mismatch.
+- **Python bindings** (`bindings/python/`, cffi). Reference: [`docs/api.md`](docs/api.md).
 
 ```sh
-make all
-build/bcb-prior-build train.txt out.bcb-prior --train-size 50000   # 기본 BT
-build/bcb-prior-build train.txt out.bcb-prior --landmark-k 512      # + landmark (text-like)
-build/bcb-prior-build train.bin out.bcb-prior --schema-record-size 18  # structural (binary)
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build
+ctest --test-dir build --output-on-failure        # includes round-trip lossless
+cmake --install build --prefix /usr/local          # find_package(bcb) / pkg-config
+```
+
+### CLI / prior build
+
+```sh
+build/bcb-prior-build train.txt out.bcb-prior --train-size 50000          # base BT prior
+build/bcb-prior-build train.txt out.bcb-prior --landmark-k 512            # + landmark (text-like)
+build/bcb-prior-build train.bin out.bcb-prior --schema-record-size 18     # structural (binary)
 build/bcb-cli encode msg.bin out.bcb --prior out.bcb-prior
 build/bcb-cli decode out.bcb msg.out --prior out.bcb-prior
 ```
 
----
+-----
 
-## 핵심 원리 / Core idea
+## How it works
 
-**약속된 공간(prior) + 점 하나(range coder 정수) = 압축.** prior 는 context→다음 바이트 분포를
-학습한 모델이고, 양쪽이 외워 두므로 전송 비용 0. 데이터는 그 공간에서의 좌표 하나로 전송된다.
-코드북(외부 chunk 사전)은 long-context 예측을 가로막으므로 제거하고, BT 가 직접 학습한다.
+A learned prior is a model of `context → next-byte distribution` (up to 24-byte context). Both ends hold
+it, so it costs zero channel bytes; each message is an arithmetic/range code against it. Three prior
+enhancements (all integer-quantized, lossless):
 
-**prior 의 세 가지 강화** (모두 정수 양자화 → 무손실):
-- **landmark** — 빈출 context 에 sharper cum 을 박아 hit 시 예측을 건너뛴다(압축비·속도 동시↑).
-- **structural** — 고정 레코드의 *자리별* 분포(byte/delta). 직전 레코드 기준 순환 시프트로 delta 도
-  실제 byte 를 코딩하면서 효과를 얻는다.
-- **mmap prior** — prior 를 파일로 공유해 재학습 없이 **즉시 시작**(300KB 학습 prior 3.74s→0.028s).
+- **landmark** — sharper distributions on frequent contexts (text-like messages).
+- **structural** — position-aware byte/delta distributions for fixed-layout records (IoT/binary).
+- **mmap prior** — shared prior file → instant start, no retraining (300 KB prior: 3.74 s → 0.028 s).
 
----
+Math mapping and design rationale: [`docs/theory.md`](docs/theory.md).
 
-## 빌드 & 검증 / Build & test
+-----
 
-```sh
-make test               # round-trip 무손실 (v0 기준)
-make msgbench           # 작은 메시지: BCB vs brotli+dict vs zstd+dict  (libbrotli-dev, libzstd-dev)
-make msgbench-landmark  # + BCB+landmark 열
-make structural-bench   # 고정 레코드 binary: base vs structural
-make api-test           # 공개 API round-trip + 손상 검출 + prior-id
-make threads-test       # 멀티스레드 동시 encode/decode 무손실
-make prior              # mmap prior 동등성(in-memory=mmap) + RSS·처리량
-```
+## Releases & security
 
-CI(`.github/workflows/msgbench.yml`)가 매 PR 마다 회귀·무손실(msgbench-check, prior-equiv,
-landmark-verify, structural-verify, api-test, threads-test)을 검사한다.
+Tagged releases build per-platform library bundles (static/shared/headers/CLI) + Python wheels, each with
+a **CycloneDX SBOM + Sigstore (cosign) signature + SHA-256 checksum**, published behind a manual approval
+gate. Verification and vulnerability reporting: [`SECURITY.md`](SECURITY.md).
 
-요구: C99. 코어는 libm 없음(측정 도구만 -lm). 작은 메시지 벤치는 `libbrotli-dev`, `libzstd-dev`.
+## Versions
 
----
+|stage|content                                          |result                    |
+|-----|-------------------------------------------------|--------------------------|
+|v0   |range coder + n-gram BT (reference)              |baseline                  |
+|v3   |integer hot path, open addressing, libm-free, MCU|~28× faster, MCU 3.56 MB  |
+|v4   |auxiliary distribution-blend channels            |+2.60 %                   |
+|v5   |mmap prior + landmark + structural schema        |binary +57–286 %, lossless|
+|v6   |stable public API, thread-safe, CRC32, prior-id  |API v0.2.0                |
 
-## 릴리즈 & 보안 / Releases & security
+## Honest limits
 
-태그(`vX.Y.Z`) push 시 `.github/workflows/release.yml` 이 플랫폼별 라이브러리 번들
-(정적·동적·헤더·CLI)과 Python wheel 을 빌드하고, 각 아티팩트에 **CycloneDX SBOM +
-Sigstore(cosign) 서명 + SHA-256 체크섬**을 붙여 GitHub Releases·PyPI 에 게시한다(게시는
-수동 승인 environment 게이트). 검증 방법은 [`SECURITY.md`](SECURITY.md), 절차·셋업은
-[`docs/releases.md`](docs/releases.md). 취약점 신고도 [`SECURITY.md`](SECURITY.md) 참고.
+- Below ~20 B no codec helps; above ~1–2 KB brotli/zstd/LZMA win.
+- No shareable prior, or random / already-compressed data → no advantage.
+- Absolute ratios depend heavily on corpus redundancy and skew; synthetic-generator figures are an upper
+  reference — real-data figures (above) are lower and the ones to quote.
+- CRC32 detects corruption, not adversarial tampering.
 
----
-
-## 개발 단계 / Versions
-
-| 단계 | 내용 | 결과 |
-|------|------|------|
-| **v0** `src/v0_baseline` | range coder + n-gram BT (reference) | baseline |
-| **v1** `src/v1_symmetric_dist` | 분포 합=1 정규화 | +0.3%, 무손실 |
-| **v3** `src/v3_integer_bt` | 정수 hot path(log-domain) + open addressing + libm 제거 + MCU | v0 −0.13%, ~28×, MCU 3.56MB |
-| **v4** `src/v4_aux_channel` | 거시 통계 보조채널 (distribution blend) | combo +2.94%, 무손실 |
-| **v5** `src/v5_mmap_prior` | mmap prior + landmark + structural schema | HTTP +30~42%, binary +57~286%, 무손실 |
-| **v6** `src/v6_public` `include/bcb.h` | 안정 공개 라이브러리, thread-safe, CRC32, prior-id | API v0.2, libbcb.a |
-
-(v2 시계계층 carry-tick 은 측정 후 폐기 — `docs/benchmarks_legacy.md`.)
-
----
-
-## 레포 구조 / Layout
-
-```
-include/bcb.h           공개 API v0.2 (stable)
-src/v0_baseline/        range coder + n-gram BT (reference)
-src/v1_symmetric_dist/  분포 합=1 정규화
-src/v3_integer_bt/      정수 BT (caching, open addressing, log-domain, MCU; thread-safe reader)
-src/v4_aux_channel/     보조채널 (distribution blend)
-src/v5_mmap_prior/      prior 직렬화 + mmap + landmark + structural schema + per-instance codec
-src/v6_public/          공개 라이브러리 구현 (bcb_api.c)
-tests/scenarios/        합성 generator (HTTP/IoT/MQTT/log/RPC, http2, binary_record/modbus/canbus)
-tests/                  round-trip·API·thread·corpus
-tools/                  bcb-cli, bcb-prior-build, bcb-msgbench, bcb-blockbench, bcb-landmark,
-                        bcb-structbench, bcb-meminfo, bcb_vs_hpack.py, landmark/structural_bench.py
-docs/                   api, benchmarks, use_cases, landmark, structural, structural_landmark,
-                        mmap_prior, hpack_comparison, mcu, theory, benchmarks_legacy
-```
-
----
-
-## 정직한 한계 / Honest limits
-
-- **~1–2KB 이상은 brotli/zstd 가 이긴다.** BCB 는 작은 메시지·정형 binary 전용.
-- prior 를 공유할 수 없으면 이점이 없다. 랜덤/이미 압축된 데이터는 압축 불가(Shannon).
-- 절대 압축비는 코퍼스 redundancy·배치 방식에 크게 좌우된다(IoT: per-device 6×+ vs interleave 2×).
-- structural 실측은 idealized entropy 추정보다 낮다(양자화·per-message framing). `docs/structural.md`.
-- 메시지 무결성은 CRC32(기본 on)로 검출하나 적대적 위변조 방지는 아니다.
-- 측정 수치는 합성 generator 기준 — 실제 데이터·HAR 로 재측정 가능(`tests/scenarios/http2_real.py`).
-
-원 기획서 대비 재현되지 않은 수치(예: HTTP 64B 10.67×, IoT +55%)는 각 docs 에 실측과 병기했다.
-
----
+-----
 
 ## License
 
-**Proprietary — All Rights Reserved.** © 2026 호시 <jahyag@gmail.com>
+**Proprietary — All Rights Reserved.** © 2026 호시 <[jahyag@gmail.com](mailto:jahyag@gmail.com)>. No use, copying, distribution,
+modification, or reverse engineering without a separate written license; see [`LICENSE`](LICENSE).
 
-This software is proprietary. No use, copying, distribution, modification, or
-reverse engineering is permitted without a separate written license. See
-[LICENSE](LICENSE) for the full terms and [AUTHORS](AUTHORS).
+**Commercial licensing / 30-day evaluation:** 호시 <[jahyag@gmail.com](mailto:jahyag@gmail.com)>.
 
-**Commercial licensing / evaluation inquiries:** 호시 <jahyag@gmail.com>.
-A commercial EULA and annual subscription terms are in preparation
-(`docs/commercial/`, draft — pending legal review).
-
-> Note: earlier versions were published under the MIT License and those specific
-> prior releases remain available under their original terms; this notice governs
-> the current and subsequent versions (see [LICENSE](LICENSE)).
+> Earlier versions were published under the MIT License; those specific prior releases remain under their
+> original terms. This notice governs the current and subsequent versions.
