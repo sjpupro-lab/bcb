@@ -26,6 +26,21 @@ void bt_v3_free(void);
  * 인스턴스마다 따로 가진다. distribution_r 은 전역을 안 쓰므로(LUT 만 read-only 공유)
  * 서로 다른 reader 를 여러 스레드가 동시에 써도 안전하다. */
 #define BCB_BT_MAX_DEPTH 24
+
+/* 분포 계산용 작업 버퍼 (~31KB). 스택 대신 여기에 둬서 해제 스택을 1KB 대로 낮춘다.
+ * 스레드 안전: 이 버퍼는 reader 마다 따로(per-instance) 가리켜야 한다 — 서로 다른
+ * 스레드가 동시에 분포를 계산하면 각자의 scratch 를 써야 충돌이 없다. NULL 이면
+ * (단일 스레드 전역 경로 전용) 함수가 내부 static scratch 로 폴백한다. */
+typedef struct {
+    int64_t  probs[256];
+    int64_t  ws[256], wt[256];
+    int      act_n[BCB_BT_MAX_DEPTH];
+    unsigned act_total[BCB_BT_MAX_DEPTH];
+    int64_t  act_l0[BCB_BT_MAX_DEPTH], act_p0[BCB_BT_MAX_DEPTH];
+    unsigned act_freq[BCB_BT_MAX_DEPTH][256];
+    int64_t  tl[BCB_BT_MAX_DEPTH], tp[BCB_BT_MAX_DEPTH];
+} BtV3Scratch;
+
 typedef struct {
     const void *pool;        /* BtEntry[]  (read-only) */
     const void *ctx_pool;    /* CtxEntry[] (read-only) */
@@ -34,6 +49,7 @@ typedef struct {
     unsigned long ctx_mask;
     unsigned char window[BCB_BT_MAX_DEPTH];   /* 가변, per-instance */
     int win_len;
+    BtV3Scratch *scratch;    /* per-instance 작업 버퍼 (NULL → 내부 static 폴백) */
 } BtV3Reader;
 
 void bt_v3_ensure_luts(void);                 /* LUT 1회 생성 (스레드 생성 전 호출) */
