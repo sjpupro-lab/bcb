@@ -197,14 +197,16 @@ structural-bench: $(BUILD)/bcb-prior-build $(BUILD)/bcb-blockbench
 	python3 tools/structural_bench.py --build $(BUILD) --recs-per-msg 100
 
 # ── 공개 라이브러리 (include/bcb.h) — v6 Phase 2 ──────────
-# 정적 라이브러리. 공개 API + 내부 코덱을 하나로 묶는다.
-$(BUILD)/libbcb.a: $(V6_SRC) $(V0_SRC) $(V3_SRC) $(V5_SRC) | $(BUILD)
+# 정적 라이브러리. 제품 경로만 묶는다: v3 정수 분포 + 정수 prior + 공개 API +
+# range coder. v0 reference BT(bt_model.c, bt_v4_*, exp/pow)는 CLI·테스트 전용이며
+# 공개 API·인코드/디코드 핫패스가 호출하지 않으므로 라이브러리에서 제외한다.
+# (range coder ce_compress.c 는 더 이상 bt_v4_* 를 참조하지 않는다 — 글루는 bt_model.c 로 이동.)
+$(BUILD)/libbcb.a: $(V6_SRC) $(V0_DIR)/ce_compress.c $(V3_SRC) $(V5_SRC) | $(BUILD)
 	$(CC) $(CFLAGS) $(V6_INC) $(V0_INC) $(V3_INC) $(V5_INC) -c $(V6_SRC) -o $(BUILD)/bcb_api.o
 	$(CC) $(CFLAGS) $(V0_INC) -c $(V0_DIR)/ce_compress.c -o $(BUILD)/ce_compress.o
-	$(CC) $(CFLAGS) $(V0_INC) -c $(V0_DIR)/bt_model.c -o $(BUILD)/bt_model.o
 	$(CC) $(CFLAGS) $(V3_INC) $(V0_INC) -c $(V3_DIR)/btv3.c -o $(BUILD)/btv3.o
 	$(CC) $(CFLAGS) $(V5_INC) $(V3_INC) $(V0_INC) -c $(V5_DIR)/bcb_prior.c -o $(BUILD)/bcb_prior.o
-	ar rcs $@ $(BUILD)/bcb_api.o $(BUILD)/ce_compress.o $(BUILD)/bt_model.o $(BUILD)/btv3.o $(BUILD)/bcb_prior.o
+	ar rcs $@ $(BUILD)/bcb_api.o $(BUILD)/ce_compress.o $(BUILD)/btv3.o $(BUILD)/bcb_prior.o
 
 # 공개 API 테스트 (libbcb 만 링크, 내부 헤더 미사용)
 $(BUILD)/test_api: tests/test_api.c $(BUILD)/libbcb.a | $(BUILD)

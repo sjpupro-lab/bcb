@@ -42,10 +42,14 @@ include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 
 # ── core sources + (internal) include dirs ───────────────────────────────────
+# Product path only: v3 integer distribution + integer prior + public API + the
+# range coder. The v0 reference BT (bt_model.c, bt_v4_*, exp/pow) is CLI/test
+# only and NOT referenced by the public API or the encode/decode hot path, so it
+# is deliberately excluded from the library. The range coder (ce_compress.c) no
+# longer references bt_v4_* (cec_default_bt glue moved to bt_model.c).
 set(BCB_CORE_SOURCES
     src/v6_public/bcb_api.c
     src/v0_baseline/ce_compress.c
-    src/v0_baseline/bt_model.c
     src/v3_integer_bt/btv3.c
     src/v5_mmap_prior/bcb_prior.c)
 set(BCB_INTERNAL_INCLUDES
@@ -118,10 +122,16 @@ else()
   set(BCB_LINK_LIB bcb_shared)
 endif()
 
+# v0 reference BT (bt_model.c, bt_v4_* + cec_default_bt) is NOT in the library;
+# the few CLI/test targets that still use it compile it directly.
+set(BCB_V0_REF_SOURCE src/v0_baseline/bt_model.c)
+
 # ── CLI tools ────────────────────────────────────────────────────────────────
 if(BCB_BUILD_TOOLS)
+  # bcb-cli uses the v0 reference BT (cec_default_bt); bcb-prior-build does not.
+  add_executable(bcb-cli tools/bcb-cli.c ${BCB_V0_REF_SOURCE})
+  add_executable(bcb-prior-build tools/bcb-prior-build.c)
   foreach(tool bcb-cli bcb-prior-build)
-    add_executable(${tool} tools/${tool}.c)
     target_include_directories(${tool} PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include ${BCB_INTERNAL_INCLUDES})
     target_link_libraries(${tool} PRIVATE ${BCB_LINK_LIB} ${BCB_MATH_LIB})
@@ -133,8 +143,9 @@ endif()
 if(BCB_BUILD_TESTS)
   enable_testing()
 
-  # self-contained v0 round-trip
-  add_executable(test_roundtrip tests/test_roundtrip.c)
+  # self-contained v0 round-trip (uses the v0 reference BT via cec_default_bt,
+  # which now lives in bt_model.c — not in the library — so compile it directly)
+  add_executable(test_roundtrip tests/test_roundtrip.c ${BCB_V0_REF_SOURCE})
   target_include_directories(test_roundtrip PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/v0_baseline)
   target_link_libraries(test_roundtrip PRIVATE ${BCB_LINK_LIB} ${BCB_MATH_LIB})
   add_test(NAME roundtrip COMMAND test_roundtrip)
