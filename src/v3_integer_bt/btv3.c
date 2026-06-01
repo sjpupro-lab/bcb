@@ -350,21 +350,27 @@ static inline int bloom_chk_rd(const unsigned char *bloom, const unsigned char *
     return 1;
 }
 
-/* 정수 분포 계산 (canonical). 전역 미사용 — reader 로부터만 읽는다. 스택 로컬(thread-safe). */
+/* 정수 분포 계산 (canonical). 전역 미사용 — reader 로부터만 읽는다. 작업 버퍼는
+ * per-instance scratch(thread-safe), 큰 배열을 스택에서 뺐다. */
 void bt_v3_distribution_r(const BtV3Reader *r, unsigned int *cum_out, unsigned int scale) {
-    int64_t probs[256];
+    /* 큰 작업 배열(~31KB)을 스택이 아닌 scratch 버퍼에 둔다 (해제 스택 1KB 대로 축소).
+     * per-instance scratch 가 있으면 그걸 쓰고(스레드 안전), 없으면(전역 단일 스레드
+     * 경로) 함수-로컬 static 으로 폴백한다. 계산 결과는 위치와 무관하게 동일(무손실). */
+    static BtV3Scratch g_static_scratch;   /* 전역 wrapper(단일 스레드) 폴백 전용 */
+    BtV3Scratch *sc = r->scratch ? r->scratch : &g_static_scratch;
+    int64_t *probs = sc->probs;
     const unsigned char *win = r->window; int wl = r->win_len;
     const BtEntry *pool = (const BtEntry*)r->pool;
 
     if (wl == 0) {
         for (int b=0;b<256;b++) probs[b] = PSCALE/256;
     } else {
-        int64_t ws[256], wt[256];
+        int64_t *ws = sc->ws, *wt = sc->wt;
         for (int b=0;b<256;b++){ ws[b]=0; wt[b]=0; }
-        int      act_n[BT_MAX_DEPTH];
-        unsigned act_total[BT_MAX_DEPTH];
-        int64_t  act_l0[BT_MAX_DEPTH], act_p0[BT_MAX_DEPTH];
-        unsigned act_freq[BT_MAX_DEPTH][256];     /* ~24KB stack, thread-local */
+        int      *act_n = sc->act_n;
+        unsigned *act_total = sc->act_total;
+        int64_t  *act_l0 = sc->act_l0, *act_p0 = sc->act_p0;
+        unsigned (*act_freq)[256] = sc->act_freq;
 
         for (int lv=0; lv<BT_LEVELS_V4; lv++) {
             int dmin=LEVELS[lv].dmin, dmax=LEVELS[lv].dmax;
@@ -390,7 +396,7 @@ void bt_v3_distribution_r(const BtV3Reader *r, unsigned int *cum_out, unsigned i
             if (nact==0) continue;
             int W = LEVELS[lv].wint;
             for (int b=0;b<256;b++) {
-                int64_t tl[BT_MAX_DEPTH], tp[BT_MAX_DEPTH];
+                int64_t *tl = sc->tl, *tp = sc->tp;
                 int64_t max_l = INT64_MIN;
                 for (int a=0; a<nact; a++) {
                     unsigned f = act_freq[a][b];
@@ -436,6 +442,7 @@ void bt_v3_distribution(unsigned int *cum_out, unsigned int scale) {
     BtV3Reader r;
     r.pool=g_pool; r.ctx_pool=g_ctx_pool; r.ctx_slot=g_ctx_slot;
     r.bloom=g_bloom; r.ctx_mask=g_ctx_mask;
+    r.scratch=NULL;     /* 전역(단일 스레드) 경로 → 내부 static scratch 폴백 */
     int wl = g_win_len > BT_MAX_DEPTH ? BT_MAX_DEPTH : g_win_len;
     memcpy(r.window, g_window, (size_t)wl); r.win_len = wl;
     bt_v3_distribution_r(&r, cum_out, scale);

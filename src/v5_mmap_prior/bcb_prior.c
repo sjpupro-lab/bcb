@@ -569,6 +569,8 @@ struct BcbCodec {
     BtV3Reader rd;            /* BT/landmark: window + read-only prior 포인터 */
     int sc_pos;
     unsigned char sc_prev[SCHEMA_MAX], sc_cur[SCHEMA_MAX];
+    BtV3Scratch scratch;      /* 분포 계산 작업 버퍼 (per-instance → 스레드 안전,
+                               * 해제 스택을 1KB 대로 낮춘다). rd.scratch 가 가리킴. */
 };
 
 static void codec_dist(uint32_t *cum, uint32_t scale, void *user) {
@@ -630,6 +632,7 @@ BcbCodec *bcb_codec_new(BcbPrior *p) {
         c->rd.ctx_slot = (const int *)p->snap.ctx_slot;
         c->rd.bloom = (const unsigned char *)p->snap.bloom;
         c->rd.ctx_mask = p->snap.ctx_nslots ? p->snap.ctx_nslots - 1 : 0;
+        c->rd.scratch = &c->scratch;   /* per-instance 작업 버퍼 (스레드 안전) */
     }
     bcb_codec_begin(c);
     return c;
