@@ -1,7 +1,7 @@
 # BCB — Binary Compression by BT
 
 **Lossless compression for small messages and bit-packed binary records that share a learned prior.**
-All-integer / libm-free core (runs on MCUs), stable embeddable C API.
+All-integer / libm-free C99 core (suited to embedded/MCU integration), stable embeddable C API.
 
 > **Bit-packing removes layout waste. BCB removes probability waste.**
 > 비트패킹은 *칸 낭비*를 줄이고, BCB는 *확률 낭비*를 줄인다.

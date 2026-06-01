@@ -25,7 +25,8 @@
   애초에 달성 불가**다. MCU 에 맞는 저설정으로 낮추면 압축비가 급락한다.
 - BCB 는 설계상 이 환경을 위한 것이다: **libm-free·정수 전용 hot path**, prior 는 **frozen
   읽기전용**(flash/PSRAM 상주), 인코더 작업 상태는 소형. MCU 빌드(`-DBCB_MCU`) 총
-  3.56MB(학습 테이블 포함), 디바이스 인코드 경로는 더 작다(`docs/mcu.md`). ESP32/RP2040 동작.
+  3.56MB(MCU 빌드 모델 테이블 RAM 예산, `make meminfo` 실측), 디바이스 인코드 작업 상태는 더
+  작다(`docs/mcu.md`). ESP32(PSRAM)·RP2040 등을 타깃으로 설계 — on-device end-to-end 측정은 미완.
 
 > **따라서 엣지 시나리오에서 올바른 비교는 "BCB vs brotli 압축비"가 아니라 "BCB vs 무압축
 > (또는 그 환경에서 실제로 돌릴 수 있는 약한 압축)"이다.** 아래 엣지 표의 brotli/zstd 열은
