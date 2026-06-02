@@ -68,10 +68,57 @@ static void cec_renorm_enc_(CecEncoder *e) {
     }
 }
 
+/* ── no-divide range-coder math (MCU targets without a HW divider) ──────────
+ * On Cortex-M0/M0+, RV32I, etc. the 64-bit '/' in the range coder lowers to a
+ * libgcc call (__udivdi3 / __aeabi_uldivmod): a generic shift-subtract loop +
+ * call overhead. Behind BCB_MCU_NO_DIV we replace every '/' with either a shift
+ * (power-of-two divisor — the common case, since distributions normalize to
+ * CEC_RC_SCALE == 1<<14, and PR1's structural sdelta cum[256] is always 16384)
+ * or an inline radix-2 shift-subtract divider for the variable-denominator
+ * step. Results are the exact truncating quotient — bit-identical output. When
+ * BCB_MCU_NO_DIV is undefined the original '/' code is compiled verbatim. */
+#if defined(BCB_MCU_NO_DIV)
+/* Exact floor(num/den) using only +,-,<<,>>,compare,mask (no '/' or '%').
+ * Processes the full 64-bit width, so the result equals num/den for any den>0
+ * regardless of `qbits` — which documents the caller's quotient bound (target
+ * <=16 bits, interval update <=33 bits) and may guide future width trimming. */
+#if defined(__GNUC__)
+__attribute__((noinline))      /* one shared copy keeps .text small on MCU flash */
+#endif
+static uint64_t bcb_divq64(uint64_t num, uint64_t den, unsigned qbits) {
+    (void)qbits;
+    if (den == 0) return 0;                 /* match: divisor is never 0 in practice */
+    uint64_t q = 0, rem = 0;
+    for (int i = 63; i >= 0; --i) {
+        rem = (rem << 1) | ((num >> i) & 1u);
+        if (rem >= den) { rem -= den; q |= (uint64_t)1u << i; }
+    }
+    return q;
+}
+/* log2 of a power-of-two (caller guarantees d is a power of two, d>=1). */
+static inline unsigned bcb_log2_pow2(uint32_t d) {
+    unsigned s = 0; while (d > 1u) { d >>= 1; s++; } return s;
+}
+#endif
+
 static void cec_enc_sym_(CecEncoder *e, uint32_t cl, uint32_t ch, uint32_t tot) {
     uint64_t r = (uint64_t)(e->high - e->low) + 1;
+#if defined(BCB_MCU_NO_DIV)
+    uint32_t qh, ql;
+    if (tot && (tot & (tot - 1)) == 0) {            /* power-of-two total → shift */
+        unsigned s = bcb_log2_pow2(tot);
+        qh = (uint32_t)((r * ch) >> s);
+        ql = (uint32_t)((r * cl) >> s);
+    } else {                                        /* general total → shift-subtract */
+        qh = (uint32_t)bcb_divq64(r * ch, tot, 32);
+        ql = (uint32_t)bcb_divq64(r * cl, tot, 32);
+    }
+    e->high = e->low + qh - 1;
+    e->low  = e->low + ql;
+#else
     e->high = e->low + (uint32_t)((r * ch) / tot) - 1;
     e->low  = e->low + (uint32_t)((r * cl) / tot);
+#endif
     cec_renorm_enc_(e);
 }
 
@@ -156,7 +203,13 @@ uint8_t cec_dec_byte(CecDecoder *d) {
     uint32_t cum[257];
     d->bt->distribution(cum, CEC_RC_SCALE, d->bt->user);
     uint64_t r = (uint64_t)(d->high - d->low) + 1;
-    uint32_t target = (uint32_t)(((uint64_t)(d->code - d->low + 1) * cum[256] - 1) / r);
+    uint32_t tot = cum[256];
+#if defined(BCB_MCU_NO_DIV)
+    /* variable denominator r → shift-subtract divider (quotient < tot <= ~2^14). */
+    uint32_t target = (uint32_t)bcb_divq64((uint64_t)(d->code - d->low + 1) * tot - 1, r, 16);
+#else
+    uint32_t target = (uint32_t)(((uint64_t)(d->code - d->low + 1) * tot - 1) / r);
+#endif
     /* binary search */
     int lo = 0, hi = 256;
     while (lo + 1 < hi) {
@@ -164,8 +217,22 @@ uint8_t cec_dec_byte(CecDecoder *d) {
         if (cum[m] <= target) lo = m; else hi = m;
     }
     uint8_t byte = (uint8_t)lo;
-    d->high = d->low + (uint32_t)((r * cum[byte+1]) / cum[256]) - 1;
-    d->low  = d->low + (uint32_t)((r * cum[byte])   / cum[256]);
+#if defined(BCB_MCU_NO_DIV)
+    uint32_t qh, ql;
+    if (tot && (tot & (tot - 1)) == 0) {            /* power-of-two total → shift */
+        unsigned s = bcb_log2_pow2(tot);
+        qh = (uint32_t)((r * cum[byte+1]) >> s);
+        ql = (uint32_t)((r * cum[byte])   >> s);
+    } else {                                        /* general total → shift-subtract */
+        qh = (uint32_t)bcb_divq64(r * cum[byte+1], tot, 32);
+        ql = (uint32_t)bcb_divq64(r * cum[byte],   tot, 32);
+    }
+    d->high = d->low + qh - 1;
+    d->low  = d->low + ql;
+#else
+    d->high = d->low + (uint32_t)((r * cum[byte+1]) / tot) - 1;
+    d->low  = d->low + (uint32_t)((r * cum[byte])   / tot);
+#endif
     cec_renorm_dec_(d);
     d->bt->train(byte, d->bt->user);
     return byte;
