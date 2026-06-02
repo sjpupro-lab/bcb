@@ -1,7 +1,8 @@
 # BCB — Binary Compression by BT
 
 **Lossless compression for small messages and bit-packed binary records that share a learned prior.**
-All-integer / libm-free C99 core (suited to embedded/MCU integration), stable embeddable C API.
+All-integer / libm-free C99 core — no hardware divider required — for embedded/MCU integration, with a
+stable embeddable C API.
 
 > **Bit-packing removes layout waste. BCB removes probability waste.**
 > 비트패킹은 *칸 낭비*를 줄이고, BCB는 *확률 낭비*를 줄인다.
@@ -30,9 +31,10 @@ telemetry, industrial protocols, bit-packed game packets, HTTP headers — BCB c
 
 - Small structured packets (~20–512 B): IoT/sensor telemetry, Modbus, CAN, MQTT/CoAP, RPC, syslog, HTTP headers.
 - **Already bit-packed** binary where field *values* are skewed (most deltas ≈ 0, enums dominated by 1–2 values).
-- Environments where both ends can hold a shared prior, including small MCUs (ESP32 / RP2040).
+- Constrained ends that both hold a shared prior — including small MCUs (ESP32 / RP2040) and cores
+  **without a hardware divider** (Cortex-M0/M0+, RV32I) via the `BCB_MCU_NO_DIV` build.
 
-**Don’t use it for**
+**Don't use it for**
 
 - Data above ~1–2 KB → brotli/zstd/LZMA win via long-range matching.
 - A single field below ~20 B → too small for *any* codec to help.
@@ -115,17 +117,40 @@ sh tests/corpus/fetch_iot_real.sh && \
 Methodology (shared-prior setup, byte definition, train/sample sizes, lossless checks) is in
 [`docs/benchmarks.md`](docs/benchmarks.md) and [`docs/benchmarks_real.md`](docs/benchmarks_real.md).
 
+> **Compression ratio vs throughput.** Ratios above are corpus-fixed and reproduce on any machine.
+> Absolute encode/decode *speed* depends on the machine and load — see
+> [`docs/spec_sheet.md`](docs/spec_sheet.md) §6 for measured throughput, and note that record (structural)
+> data is ~30× faster than the text/landmark path but trades some ratio for it.
+
+-----
+
+## Footprint & dependencies
+
+Suited to MCUs and constrained ends — measured, not aspirational ([`docs/spec_sheet.md`](docs/spec_sheet.md)):
+
+| | value |
+|---|---|
+| Decode peak stack | **1.53 KB** |
+| Encode peak stack | 1.61 KB |
+| Frozen prior (MCU build) | **3.56 MB** read-only (flash/PSRAM) |
+| MCU core `.text` | 26.9 KB |
+| Static / shared lib | 59.4 KB / 49.8 KB |
+| External deps | **libc only** — libm 0, third-party 0 |
+| Hardware divider | **not required** (`BCB_MCU_NO_DIV` → shift / shift-subtract, bit-identical) |
+
+Encode/decode/prior-build are all integer + add/sub/shift — zero transcendental calls. With
+`BCB_MCU_NO_DIV` the range coder needs no 64-bit hardware division either, so it ports cleanly to cores
+that lack a divider.
+
 -----
 
 ## Where this sits vs Oodle Network / SEGGER emCompress
 
 - **emCompress** is the LZ family (LZMA/DEFLATE/LZ4); it builds its model *from within each block*, so it
   inflates on small per-packet records — exactly the band BCB targets.
-- **Oodle Network** shares BCB’s paradigm (a pre-trained model held on both ends) but targets game servers
+- **Oodle Network** shares BCB's paradigm (a pre-trained model held on both ends) but targets game servers
   with a 4–8 MB model; it is not an MCU library and has no fixed-record schema. We make **no same-data
   claim against Oodle** — that is best settled by running both on your own captures during evaluation.
-
-Full analysis: [`docs/compare.md`](docs/compare.md).
 
 -----
 
@@ -166,11 +191,13 @@ build/bcb-cli decode out.bcb msg.out --prior out.bcb-prior
 ## How it works
 
 A learned prior is a model of `context → next-byte distribution` (up to 24-byte context). Both ends hold
-it, so it costs zero channel bytes; each message is an arithmetic/range code against it. Three prior
+it, so it costs zero channel bytes; each message is an arithmetic/range code against it. Prior
 enhancements (all integer-quantized, lossless):
 
 - **landmark** — sharper distributions on frequent contexts (text-like messages).
-- **structural** — position-aware byte/delta distributions for fixed-layout records (IoT/binary).
+- **structural** — position-aware byte/delta distributions for fixed-layout records (IoT/binary). The
+  delta-symbol fast path (`BCB_TAG_SDELTA`) reads a per-position precomputed table with no per-byte
+  distribution search, so record data encodes ~30× faster than the text path.
 - **mmap prior** — shared prior file → instant start, no retraining (300 KB prior: 3.74 s → 0.028 s).
 
 Math mapping and design rationale: [`docs/theory.md`](docs/theory.md).
@@ -192,6 +219,10 @@ gate. Verification and vulnerability reporting: [`SECURITY.md`](SECURITY.md).
 |v4   |auxiliary distribution-blend channels            |+2.60 %                   |
 |v5   |mmap prior + landmark + structural schema        |binary +57–286 %, lossless|
 |v6   |stable public API, thread-safe, CRC32, prior-id  |API v0.2.0                |
+|v7   |structural delta fast path + distribution hot-path opt + `BCB_MCU_NO_DIV`|record ~30×, text 1.4–2.9× — **bit-identical**, no-divider MCU|
+
+The v7 changes are output-compatible (byte-identical streams / lossless), so they ship under API v0.2.0.
+Per-change summary: [`docs/upgrade_summary.md`](docs/upgrade_summary.md).
 
 ## Honest limits
 
@@ -199,6 +230,7 @@ gate. Verification and vulnerability reporting: [`SECURITY.md`](SECURITY.md).
 - No shareable prior, or random / already-compressed data → no advantage.
 - Absolute ratios depend heavily on corpus redundancy and skew; synthetic-generator figures are an upper
   reference — real-data figures (above) are lower and the ones to quote.
+- Encode/decode *throughput* is machine-dependent; quote ratios, not absolute msgs/s, without a machine note.
 - CRC32 detects corruption, not adversarial tampering.
 
 -----
