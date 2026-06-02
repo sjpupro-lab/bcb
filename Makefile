@@ -43,7 +43,7 @@ MSG_SIZES ?= 64,128,256,512,1024,2048,4096
 MSG_BYTES ?= 400000
 MSG_SAMPLES ?= 24
 
-.PHONY: all test bench clean msgbench msgbench-md msgbench-landmark msgbench-check prior prior-equiv prior-rss hpack hpack-docs landmark landmark-verify landmark-bench landmark-bench-docs structbench structural-bench structural-verify api-test threads-test
+.PHONY: all test bench clean msgbench msgbench-md msgbench-landmark msgbench-check prior prior-equiv prior-rss hpack hpack-docs landmark landmark-verify landmark-bench landmark-bench-docs structbench structural-bench structural-verify api-test threads-test nodiv-test
 
 all: $(BUILD)/bcb-cli $(BUILD)/bcb-bench
 
@@ -64,6 +64,14 @@ $(BUILD)/test_v1_compare: tests/test_v1_compare.c $(V0_SRC) $(V1_SRC) | $(BUILD)
 
 test: $(BUILD)/test_roundtrip
 	./$(BUILD)/test_roundtrip
+
+# BCB_MCU_NO_DIV divider unit test (no-HW-divide range coder). Includes
+# ce_compress.c directly to reach the static shift-subtract divider.
+$(BUILD)/test_nodiv: tests/test_nodiv.c $(V0_DIR)/ce_compress.c $(V0_DIR)/ce_compress.h | $(BUILD)
+	$(CC) $(CFLAGS) -DBCB_MCU_NO_DIV $(V0_INC) -o $@ tests/test_nodiv.c $(LDLIBS)
+
+nodiv-test: $(BUILD)/test_nodiv
+	./$(BUILD)/test_nodiv
 
 # v1 합=1 강제 ablation (v0 vs v1a)
 v1-compare: $(BUILD)/test_v1_compare
