@@ -57,20 +57,21 @@ set(BCB_INTERNAL_INCLUDES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/v3_integer_bt
     ${CMAKE_CURRENT_SOURCE_DIR}/src/v5_mmap_prior)
 
-# libm only where the math lib is a separate object (not on Windows/macOS).
-set(BCB_MATH_LIB "")
+# The library itself is libm-free (integer/double arithmetic only, no <math.h>
+# transcendental calls). Only the v0 reference BT (bt_model.c, exp/pow) — used by
+# bcb-cli/test_roundtrip, NOT the library — needs libm; that's BCB_V0_MATH_LIB.
+set(BCB_V0_MATH_LIB "")
 if(UNIX AND NOT APPLE)
-  set(BCB_MATH_LIB m)
+  set(BCB_V0_MATH_LIB m)
 endif()
 
-# Helper: apply common settings to a library target.
+# Helper: apply common settings to a library target. (No libm — core is libm-free.)
 function(_bcb_configure_lib tgt)
   target_include_directories(${tgt} PUBLIC
       $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
       $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
   # internal headers needed only while compiling the library itself
   target_include_directories(${tgt} PRIVATE ${BCB_INTERNAL_INCLUDES})
-  target_link_libraries(${tgt} PRIVATE ${BCB_MATH_LIB})
   set_target_properties(${tgt} PROPERTIES OUTPUT_NAME bcb POSITION_INDEPENDENT_CODE ON)
 endfunction()
 
@@ -134,7 +135,7 @@ if(BCB_BUILD_TOOLS)
   foreach(tool bcb-cli bcb-prior-build)
     target_include_directories(${tool} PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include ${BCB_INTERNAL_INCLUDES})
-    target_link_libraries(${tool} PRIVATE ${BCB_LINK_LIB} ${BCB_MATH_LIB})
+    target_link_libraries(${tool} PRIVATE ${BCB_LINK_LIB} ${BCB_V0_MATH_LIB})
   endforeach()
   install(TARGETS bcb-cli bcb-prior-build RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 endif()
@@ -147,7 +148,7 @@ if(BCB_BUILD_TESTS)
   # which now lives in bt_model.c — not in the library — so compile it directly)
   add_executable(test_roundtrip tests/test_roundtrip.c ${BCB_V0_REF_SOURCE})
   target_include_directories(test_roundtrip PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/v0_baseline)
-  target_link_libraries(test_roundtrip PRIVATE ${BCB_LINK_LIB} ${BCB_MATH_LIB})
+  target_link_libraries(test_roundtrip PRIVATE ${BCB_LINK_LIB} ${BCB_V0_MATH_LIB})
   add_test(NAME roundtrip COMMAND test_roundtrip)
 
   # public-API tests linked against the SHARED library (proves the .so/.dll works)
@@ -214,11 +215,8 @@ install(FILES
     ${CMAKE_CURRENT_BINARY_DIR}/bcbConfigVersion.cmake
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/bcb)
 
-# pkg-config (.pc) for non-CMake consumers
+# pkg-config (.pc) for non-CMake consumers. Library is libm-free → no -lm.
 set(BCB_PC_LIBM "")
-if(BCB_MATH_LIB)
-  set(BCB_PC_LIBM "-lm")
-endif()
 configure_file(cmake/bcb.pc.in ${CMAKE_CURRENT_BINARY_DIR}/bcb.pc @ONLY)
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/bcb.pc
         DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig)
