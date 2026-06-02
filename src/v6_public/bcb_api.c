@@ -20,8 +20,9 @@
 struct BcbEncoder { BcbCodec *c; int crc_on; int id_on; };
 struct BcbDecoder { BcbCodec *c; };
 
-#define BCB_TAG_CRC  0x01
-#define BCB_TAG_ID   0x02
+#define BCB_TAG_CRC     0x01
+#define BCB_TAG_ID      0x02
+#define BCB_TAG_SDELTA  0x04   /* structural delta-symbol format (prev-independent cum) */
 
 /* bitwise CRC32 (IEEE) — 테이블 없음 → lazy-init race 없음(스레드 안전). */
 static uint32_t crc32_(const uint8_t *d, size_t n) {
@@ -59,17 +60,23 @@ static ssize_t compress_core(BcbCodec *c, int crc_on, int id_on, const uint8_t *
                              uint8_t *out, size_t cap) {
     if (!c) return BCB_ERR_INVALID_PRIOR;
     bcb_codec_begin(c);
+    /* Policy: structural priors encode with the delta-symbol fast path (new
+     * format). The tag bit lets the decoder pick the matching path. */
+    int sd = bcb_codec_is_structural(c);
+    bcb_codec_set_sdelta(c, sd);
     CecBT bt = bcb_codec_cec_bt(c);
     CecEncoder *e = cec_enc_new(&bt);
     if (!e) return BCB_ERR_INVALID_PRIOR;
-    for (size_t i = 0; i < in_len; i++) cec_enc_byte(e, in[i]);
+    if (sd) for (size_t i = 0; i < in_len; i++) cec_enc_byte(e, bcb_codec_enc_xform(c, in[i]));
+    else    for (size_t i = 0; i < in_len; i++) cec_enc_byte(e, in[i]);
     size_t clen = 0;
     uint8_t *comp = cec_enc_finish(e, &clen);
     cec_enc_free(e);
     if (!comp && clen) return BCB_ERR_INVALID_PRIOR;
 
     uint8_t hdr[32]; int hn = 0;
-    hdr[hn++] = (uint8_t)((crc_on ? BCB_TAG_CRC : 0) | (id_on ? BCB_TAG_ID : 0));
+    hdr[hn++] = (uint8_t)((crc_on ? BCB_TAG_CRC : 0) | (id_on ? BCB_TAG_ID : 0) |
+                          (sd ? BCB_TAG_SDELTA : 0));
     hn += varint_put(hdr + hn, (uint64_t)in_len);
     if (crc_on) {
         uint32_t cc = crc32_(in, in_len);
@@ -112,9 +119,25 @@ static ssize_t decompress_core(BcbCodec *c, const uint8_t *in, size_t in_len,
     if (orig > cap) return BCB_ERR_OUTPUT_TOO_SMALL;
     if (orig == 0) return 0;
     bcb_codec_begin(c);
+    /* New (delta-symbol) streams set BCB_TAG_SDELTA and are only valid for a
+     * structural prior; legacy streams (bit unset) use the rotation path. */
+    int sd = (tag & BCB_TAG_SDELTA) && bcb_codec_is_structural(c);
+    bcb_codec_set_sdelta(c, sd);
     CecBT bt = bcb_codec_cec_bt(c);
-    uint8_t *dec = cec_decompress(in + off, in_len - off, (size_t)orig, &bt);
-    if (!dec) return BCB_ERR_CORRUPTED;
+    uint8_t *dec;
+    if (sd) {
+        /* The coder decodes the symbol; codec_train reconstructs the real byte
+         * into sc_last (delta: real = sym+prev). Output the reconstructed byte. */
+        dec = (uint8_t *)malloc((size_t)orig);
+        if (!dec) return BCB_ERR_CORRUPTED;
+        CecDecoder *d = cec_dec_new(in + off, in_len - off, &bt);
+        if (!d) { free(dec); return BCB_ERR_CORRUPTED; }
+        for (size_t i = 0; i < (size_t)orig; i++) { (void)cec_dec_byte(d); dec[i] = bcb_codec_dec_last(c); }
+        cec_dec_free(d);
+    } else {
+        dec = cec_decompress(in + off, in_len - off, (size_t)orig, &bt);
+        if (!dec) return BCB_ERR_CORRUPTED;
+    }
     if (has_crc && crc32_(dec, (size_t)orig) != want) { free(dec); return BCB_ERR_CORRUPTED; }
     memcpy(out, dec, (size_t)orig);
     free(dec);
