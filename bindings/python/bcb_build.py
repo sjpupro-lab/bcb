@@ -22,7 +22,6 @@ CSRC = os.path.join(HERE, "_csrc")
 _CORE = [
     "include/bcb.h",
     "src/v0_baseline/ce_compress.c", "src/v0_baseline/ce_compress.h",
-    "src/v0_baseline/bt_model.c",    "src/v0_baseline/bt_model.h",
     "src/v3_integer_bt/btv3.c",      "src/v3_integer_bt/btv3.h",
     "src/v5_mmap_prior/bcb_prior.c", "src/v5_mmap_prior/bcb_prior.h",
     "src/v6_public/bcb_api.c",

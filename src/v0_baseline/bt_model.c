@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <math.h>
 #include "bt_model.h"
+#include "ce_compress.h"   /* CecBT (cec_default_bt 글루) */
 
 #define BT_BUCKETS    (1<<18)
 #define BT_POOL       (8*1024*1024)
@@ -153,3 +154,24 @@ void bt_v4_distribution(unsigned int *cum_out, unsigned int scale) {
     cum_out[256] = acc;
 }
 unsigned long bt_v4_entries(void){return g_table?g_table->pool_used:0;}
+
+/* ── 내장 BT 글루 — cec_default_bt() ─────────────────────────────────────
+ * v0 reference BT(bt_v4_*)를 CecBT 로 감싼다. CLI·테스트 전용. ce_compress.c
+ * (range coder)에서 이리로 옮겨, 코어 라이브러리가 bt_model.c 를 제외해도
+ * range coder 가 미정의 심볼(bt_v4_*)을 남기지 않게 한다. */
+static void cec_bt_v4_dist(uint32_t *cum, uint32_t scale, void *u) {
+    (void)u;
+    bt_v4_distribution(cum, scale);
+}
+static void cec_bt_v4_train(uint8_t b, void *u) {
+    (void)u;
+    bt_v4_train(b);
+}
+CecBT cec_default_bt(void) {
+    bt_v4_init();
+    CecBT bt;
+    bt.distribution = cec_bt_v4_dist;
+    bt.train        = cec_bt_v4_train;
+    bt.user         = NULL;
+    return bt;
+}

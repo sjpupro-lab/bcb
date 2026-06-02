@@ -4,7 +4,6 @@
  */
 /* ce_compress.c — implementation */
 #include "ce_compress.h"
-#include "bt_model.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -192,21 +191,8 @@ uint8_t *cec_decompress(const uint8_t *data, size_t len, size_t orig_len, const 
     return out;
 }
 
-/* ── 내장 BT (bt_model_v2 wrapping) ────────────────────── */
-static void default_dist(uint32_t *cum, uint32_t scale, void *u) {
-    (void)u;
-    bt_v4_distribution(cum, scale);
-}
-static void default_train(uint8_t b, void *u) {
-    (void)u;
-    bt_v4_train(b);
-}
+/* ── 내장 BT (bt_model 기반) — cec_default_bt() ──────────────────────────
+ * 이 글루는 v0 reference BT(bt_model.c, bt_v4_*)를 CecBT 로 감싼다. CLI·테스트
+ * 전용이며 제품 경로(공개 API)는 쓰지 않는다. range coder 가 v0 BT 에 링크
+ * 의존하지 않도록(코어 라이브러리에서 bt_model.c 제외 가능) bt_model.c 로 옮겼다. */
 
-CecBT cec_default_bt(void) {
-    bt_v4_init();
-    CecBT bt;
-    bt.distribution = default_dist;
-    bt.train        = default_train;
-    bt.user         = NULL;
-    return bt;
-}

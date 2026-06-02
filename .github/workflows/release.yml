@@ -109,9 +109,10 @@ jobs:
         shell: bash
         run: |
           mkdir -p bindings/python/_csrc
+          # Product path only — the v0 reference BT (bt_model.c) is not part of
+          # the wheel (the binding uses the public API; bcb_build.py omits it).
           cp include/bcb.h \
              src/v0_baseline/ce_compress.c src/v0_baseline/ce_compress.h \
-             src/v0_baseline/bt_model.c    src/v0_baseline/bt_model.h \
              src/v3_integer_bt/btv3.c      src/v3_integer_bt/btv3.h \
              src/v5_mmap_prior/bcb_prior.c src/v5_mmap_prior/bcb_prior.h \
              src/v6_public/bcb_api.c \
