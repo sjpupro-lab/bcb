@@ -568,9 +568,43 @@ struct BcbCodec {
     BtV3Reader rd;            /* BT/landmark: window + read-only prior 포인터 */
     int sc_pos;
     unsigned char sc_prev[SCHEMA_MAX], sc_cur[SCHEMA_MAX];
+    /* structural delta-symbol fast path (BCB_TAG_SDELTA): code sym=(b-prev) with
+     * a prev-independent raw cum instead of rotating the cum by prev. Format
+     * differs from the legacy rotation path (not bit-identical) but lossless and
+     * same widths → same ratio. sdelta=0 keeps the legacy rotation (back-compat). */
+    int sdelta;
+    unsigned char sc_last;    /* last reconstructed real byte (sdelta decode output) */
+    int sc_rec_mask;          /* rec-1 if schema_rec is a power of two, else 0 */
+#ifndef BCB_SDELTA_NO_PRECOMPUTE
+    uint32_t *sc_cum_pre;     /* schema_pos*257 prev-independent cum, NULL if unused */
+#endif
     BtV3Scratch scratch;      /* 분포 계산 작업 버퍼 (per-instance → 스레드 안전,
                                * 해제 스택을 1KB 대로 낮춘다). rd.scratch 가 가리킴. */
 };
+
+/* Build the per-position prev-independent cum table once (frozen prior → fixed).
+ * cum[256] is normalized to exactly CEC_RC_SCALE; on malformed widths it falls
+ * back to a uniform cum exactly like codec_dist, so encoder/decoder agree. */
+#ifndef BCB_SDELTA_NO_PRECOMPUTE
+static uint32_t *sdelta_build_precompute(const BcbPrior *p) {
+    int P = p->schema_pos;
+    uint32_t *t = (uint32_t *)malloc((size_t)P * 257u * sizeof(uint32_t));
+    if (!t) return NULL;
+    for (int pos = 0; pos < P; pos++) {
+        const uint16_t *w = p->schema_cum + (size_t)pos * 256;
+        uint32_t *cum = t + (size_t)pos * 257;
+        uint32_t acc = 0;
+        for (int b = 0; b < 256; b++) { cum[b] = acc; acc += w[b]; }
+        cum[256] = acc;
+        if (acc != (uint32_t)CEC_RC_SCALE) {
+            unsigned int u = (unsigned int)CEC_RC_SCALE / 256, a2 = 0;
+            for (int b = 0; b < 256; b++) { cum[b] = a2; a2 += (u ? u : 1); }
+            cum[256] = a2;
+        }
+    }
+    return t;
+}
+#endif
 
 static void codec_dist(uint32_t *cum, uint32_t scale, void *user) {
     BcbCodec *c = (BcbCodec *)user;
@@ -578,6 +612,24 @@ static void codec_dist(uint32_t *cum, uint32_t scale, void *user) {
     if (c->mode == 1) {                       /* structural */
         int pos = c->sc_pos;
         if (pos >= p->schema_pos) pos %= p->schema_pos;
+        if (c->sdelta) {
+            /* delta-symbol fast path: prev-independent raw cum (delta handled by
+             * the symbol transform in encode/decode + codec_train). */
+#ifndef BCB_SDELTA_NO_PRECOMPUTE
+            if (c->sc_cum_pre) {
+                memcpy(cum, c->sc_cum_pre + (size_t)pos * 257, 257 * sizeof(uint32_t));
+                return;
+            }
+#endif
+            const uint16_t *w = p->schema_cum + (size_t)pos * 256;
+            uint32_t acc = 0;
+            for (int b = 0; b < 256; b++) { cum[b] = acc; acc += w[b]; }
+            cum[256] = acc;
+            if (acc == scale) return;
+            unsigned int u = scale/256, a2 = 0;
+            for (int b=0;b<256;b++){ cum[b]=a2; a2 += (u?u:1); } cum[256]=a2;
+            return;
+        }
         const uint16_t *w = p->schema_cum + (size_t)pos * 256;
         uint32_t acc = 0;
         if (p->schema_modes[pos]) { int sh = c->sc_prev[pos];
@@ -606,11 +658,23 @@ static void codec_dist(uint32_t *cum, uint32_t scale, void *user) {
 static void codec_train(unsigned char b, void *user) {
     BcbCodec *c = (BcbCodec *)user;
     if (c->mode == 1) {
-        c->sc_cur[c->sc_pos] = b;
-        c->sc_pos++;
-        if (c->sc_pos >= c->p->schema_rec) {
-            memcpy(c->sc_prev, c->sc_cur, (size_t)c->p->schema_rec);
-            c->sc_pos = 0;
+        int pos = c->sc_pos;
+        /* In sdelta mode `b` is the coded SYMBOL; reconstruct the real byte so
+         * prev-tracking stays in actual-byte space (delta pos: real = sym+prev). */
+        unsigned char actual = b;
+        if (c->sdelta && c->p->schema_modes[pos])
+            actual = (unsigned char)((b + c->sc_prev[pos]) & 0xFF);
+        c->sc_last = actual;
+        c->sc_cur[pos] = actual;
+        if (c->sc_rec_mask) {                 /* power-of-two record: mask advance */
+            c->sc_pos = (pos + 1) & c->sc_rec_mask;
+            if (c->sc_pos == 0) memcpy(c->sc_prev, c->sc_cur, (size_t)c->p->schema_rec);
+        } else {
+            c->sc_pos = pos + 1;
+            if (c->sc_pos >= c->p->schema_rec) {
+                memcpy(c->sc_prev, c->sc_cur, (size_t)c->p->schema_rec);
+                c->sc_pos = 0;
+            }
         }
     } else {
         bt_v3_reader_push(&c->rd, b);
@@ -625,6 +689,9 @@ BcbCodec *bcb_codec_new(BcbPrior *p) {
     bt_v3_ensure_luts();
     if (p->schema_rec > 0 && p->schema_pos > 0 && p->schema_rec <= SCHEMA_MAX) {
         c->mode = 1;
+        c->sc_rec_mask = ((p->schema_rec & (p->schema_rec - 1)) == 0) ? (p->schema_rec - 1) : 0;
+        /* sc_cum_pre is built lazily on first sdelta enable (bcb_codec_set_sdelta)
+         * so legacy-decode and BT codecs pay nothing. */
     } else {
         c->mode = 0;
         c->rd.pool = p->snap.pool; c->rd.ctx_pool = p->snap.ctx_pool;
@@ -643,7 +710,13 @@ void bcb_codec_begin(BcbCodec *c) {
     else bt_v3_reader_reset_window(&c->rd);
 }
 
-void bcb_codec_free(BcbCodec *c) { free(c); }
+void bcb_codec_free(BcbCodec *c) {
+    if (!c) return;
+#ifndef BCB_SDELTA_NO_PRECOMPUTE
+    free(c->sc_cum_pre);
+#endif
+    free(c);
+}
 
 CecBT bcb_codec_cec_bt(BcbCodec *c) {
     CecBT bt; bt.distribution = codec_dist; bt.train = codec_train; bt.user = c;
@@ -651,6 +724,27 @@ CecBT bcb_codec_cec_bt(BcbCodec *c) {
 }
 
 const unsigned char *bcb_codec_prior_id(const BcbCodec *c) { return c && c->p ? c->p->id : NULL; }
+
+/* ── structural delta-symbol fast path: API for bcb_api.c encode/decode loops ── */
+int bcb_codec_is_structural(const BcbCodec *c) { return c && c->mode == 1; }
+void bcb_codec_set_sdelta(BcbCodec *c, int on) {
+    if (!c) return;
+    c->sdelta = (c->mode == 1 && on) ? 1 : 0;
+#ifndef BCB_SDELTA_NO_PRECOMPUTE
+    if (c->sdelta && !c->sc_cum_pre) c->sc_cum_pre = sdelta_build_precompute(c->p);
+#endif
+}
+unsigned char bcb_codec_dec_last(const BcbCodec *c) { return c ? c->sc_last : 0; }
+
+/* Transform a real byte → coded symbol at the current position (no state change;
+ * codec_train advances the position). delta pos: sym=(b-prev)&0xFF, byte pos: b. */
+unsigned char bcb_codec_enc_xform(const BcbCodec *c, unsigned char b) {
+    if (!c || c->mode != 1 || !c->sdelta) return b;
+    int pos = c->sc_pos;
+    if (pos >= c->p->schema_pos) pos %= c->p->schema_pos;
+    if (c->p->schema_modes[pos]) return (unsigned char)((b - c->sc_prev[pos]) & 0xFF);
+    return b;
+}
 
 /* ── libm-free log2 (schema mode 결정용) ──────────────────────────────────
  * held-out cross-entropy vb/vd 의 합을 비교(vd<vb)해 byte vs delta 모드를 고를

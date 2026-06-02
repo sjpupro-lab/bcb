@@ -106,6 +106,16 @@ void      bcb_codec_begin(BcbCodec *c);   /* 메시지 경계 리셋 */
 CecBT     bcb_codec_cec_bt(BcbCodec *c);  /* 이 codec 에 묶인 CecBT (전역 미사용) */
 const unsigned char *bcb_codec_prior_id(const BcbCodec *c);  /* codec 의 prior id (16B) */
 
+/* ── structural delta-symbol fast path (BCB_TAG_SDELTA) ──────────────────────
+ * Encoder enables sdelta for structural priors and codes sym=(b-prev) with a
+ * prev-independent (precomputed) cum; decoder enables it from the container tag.
+ * Lossless and same widths (no ratio regression); format differs from the
+ * legacy rotation path, which the decoder still handles when the tag is unset. */
+int           bcb_codec_is_structural(const BcbCodec *c);   /* 1 if mode==structural */
+void          bcb_codec_set_sdelta(BcbCodec *c, int on);    /* enable fast path (no-op unless structural) */
+unsigned char bcb_codec_enc_xform(const BcbCodec *c, unsigned char b); /* real byte → coded symbol */
+unsigned char bcb_codec_dec_last(const BcbCodec *c);        /* reconstructed real byte after a decode step */
+
 /* prior 가 record schema 를 가지면 record_size(>0), 없으면 0. */
 BCB_API int bcb_prior_record_size(const BcbPrior *p);
 
