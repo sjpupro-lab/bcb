@@ -376,6 +376,8 @@ void bt_v3_distribution_r(const BtV3Reader *r, unsigned int *cum_out, unsigned i
             int dmin=LEVELS[lv].dmin, dmax=LEVELS[lv].dmax;
             int start = wl<dmax?wl:dmax;
             int nact=0;
+            int obs[256]; int nobs=0;            /* 관측된 next-byte 합집합 */
+            unsigned char seen[256]; memset(seen,0,sizeof seen);
             for (int n=start; n>=dmin; n--) {
                 if (n>wl) continue;
                 const unsigned char *ctx = win + (wl-n);
@@ -390,13 +392,35 @@ void bt_v3_distribution_r(const BtV3Reader *r, unsigned int *cum_out, unsigned i
                 act_l0[a] = (int64_t)EXP_LOG2[n] + CONF_LOG2[idx0];
                 act_p0[a] = PSCALE/(int64_t)(total+256);
                 memset(act_freq[a], 0, 256*sizeof(unsigned));
-                for (int idx=cc->first_entry; idx>=0; idx=pool[idx].ctx_next)
-                    act_freq[a][pool[idx].next_byte] = pool[idx].freq;
+                for (int idx=cc->first_entry; idx>=0; idx=pool[idx].ctx_next) {
+                    unsigned char nb = pool[idx].next_byte;
+                    act_freq[a][nb] = pool[idx].freq;
+                    if(!seen[nb]){ seen[nb]=1; obs[nobs++]=nb; }
+                }
             }
             if (nact==0) continue;
             int W = LEVELS[lv].wint;
-            for (int b=0;b<256;b++) {
-                int64_t *tl = sc->tl, *tp = sc->tp;
+            int64_t *tl = sc->tl, *tp = sc->tp;
+
+            /* 미관측(all-unobserved) byte 의 기여는 byte 와 무관(act_l0/act_p0 만 사용)하므로
+             * 레벨당 1회만 계산해 재사용한다. 관측된 byte 만 per-byte 계산한다 → bit-identical,
+             * 단지 ~250개 미관측 byte 의 중복 계산을 제거(핫스팟 가속). */
+            int64_t base_max_l = INT64_MIN;
+            for (int a=0; a<nact; a++) if (act_l0[a] > base_max_l) base_max_l = act_l0[a];
+            int64_t base_num=0, base_den=0;
+            for (int a=0; a<nact; a++) {
+                int64_t w = exp2_w(act_l0[a] - base_max_l);
+                base_num += w*act_p0[a]; base_den += w;
+            }
+            int64_t def_lv = base_den>0 ? base_num/base_den : 0;   /* 미관측 byte 의 prob_lv */
+            int def_has = (base_den>0);
+
+            /* 1) 미관측 기본값을 모든 byte 에 일괄 적용 */
+            if (def_has) for (int b=0;b<256;b++){ ws[b]+=(int64_t)W*def_lv; wt[b]+=(int64_t)W; }
+
+            /* 2) 관측 byte 만 정확 계산 — 기본값 기여를 빼고 실제 기여로 교체 */
+            for (int oi=0; oi<nobs; oi++) {
+                int b = obs[oi];
                 int64_t max_l = INT64_MIN;
                 for (int a=0; a<nact; a++) {
                     unsigned f = act_freq[a][b];
@@ -414,6 +438,8 @@ void bt_v3_distribution_r(const BtV3Reader *r, unsigned int *cum_out, unsigned i
                     int64_t w = exp2_w(tl[a] - max_l);
                     num += w*tp[a]; den += w;
                 }
+                /* 이 byte 에 이미 더한 기본값(def)을 제거하고 실제값으로 대체 */
+                if (def_has) { ws[b]-=(int64_t)W*def_lv; wt[b]-=(int64_t)W; }
                 if (den>0) { int64_t prob_lv = num/den; ws[b] += (int64_t)W*prob_lv; wt[b] += (int64_t)W; }
             }
         }
