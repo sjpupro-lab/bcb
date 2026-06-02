@@ -17,7 +17,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
-#include <math.h>
 #if !defined(_WIN32)
   #include <fcntl.h>
   #include <unistd.h>
@@ -653,6 +652,26 @@ CecBT bcb_codec_cec_bt(BcbCodec *c) {
 
 const unsigned char *bcb_codec_prior_id(const BcbCodec *c) { return c && c->p ? c->p->id : NULL; }
 
+/* ── libm-free log2 (schema mode 결정용) ──────────────────────────────────
+ * held-out cross-entropy vb/vd 의 합을 비교(vd<vb)해 byte vs delta 모드를 고를
+ * 뿐이라 절대값은 안 쓴다. <math.h> 의존을 없애려고 정수/double 사칙연산만으로
+ * log2 를 계산한다(초월함수 호출 없음 → libm 링크 불필요). x>0 가정.
+ * mantissa 32회 제곱으로 분수부를 뽑아 충분히 정밀(전 코퍼스에서 libm 과 동일한
+ * mode 결정 → prior 바이트 동일, 무손실 유지). */
+static double bcb_log2_nolibm(double x) {
+    if (x <= 0.0) return -1000.0;           /* 호출부에서 x>0 이지만 방어 */
+    int e = 0;
+    while (x < 1.0) { x *= 2.0; e--; }
+    while (x >= 2.0) { x *= 0.5; e++; }      /* x ∈ [1,2) */
+    double frac = 0.0, w = 0.5;
+    for (int i = 0; i < 32; i++) {           /* 분수부: 32비트 */
+        x *= x;
+        if (x >= 2.0) { x *= 0.5; frac += w; }
+        w *= 0.5;
+    }
+    return (double)e + frac;
+}
+
 /* ── schema 빌드: corpus 를 rec 로 정렬, 자리별 byte/delta 분포 + held-out mode ── */
 int bcb_prior_save_with_schema(const char *path, const unsigned char *corpus,
                                size_t corpus_len, int rec) {
@@ -683,9 +702,9 @@ int bcb_prior_save_with_schema(const char *path, const unsigned char *corpus,
         double vb = 0, vd = 0; size_t vstart = (nfit < nrec) ? nfit : 1, vn = 0;
         for (size_t r = vstart; r < nrec; r++) {
             unsigned char b = corpus[r*rec + pp];
-            vb += -log2((bf[pp][b] + LM_BACKOFF_W/256) / (totb + LM_BACKOFF_W));
+            vb += -bcb_log2_nolibm((bf[pp][b] + LM_BACKOFF_W/256) / (totb + LM_BACKOFF_W));
             unsigned char d = (unsigned char)(b - corpus[(r-1)*rec + pp]);
-            vd += -log2((df[pp][d] + LM_BACKOFF_W/256) / (totd + LM_BACKOFF_W));
+            vd += -bcb_log2_nolibm((df[pp][d] + LM_BACKOFF_W/256) / (totd + LM_BACKOFF_W));
             vn++;
         }
         int use_delta = (vn > 0 && vd < vb);
