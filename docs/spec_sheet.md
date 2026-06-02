@@ -65,10 +65,32 @@
 
 ## 6. 인코드 / 디코드 속도
 
-| 항목 | 값 | 신뢰도 | 근거 |
+측정: `bcb-prior-test rss-mmap <corpus> <prior> --msgs 5000`, @128B, 1스레드, 이 CI 러너.
+**데이터-기능 짝**을 맞춰 측정한다 — 텍스트형은 landmark prior, 레코드형은 schema(structural)
+prior. 짝이 틀리면(예: 레코드 데이터를 landmark 로) 매 바이트 full BT 분포로 폴백해 수백 msgs/s 로
+떨어진다(아래 "측정 주의" 참조). **압축비(ratio)는 머신과 무관히 재현되지만 절대 msgs/s 는
+머신·부하 의존**이라 대표값(반복 측정 중앙값)으로 적는다.
+
+| 항목 | 압축비(재현) | 인코드 msgs/s (대표값, 머신의존) | 신뢰도 |
 |---|---|---|---|
-| 인코드 처리량 @128B (x86-64) | 193 (in-mem) / 197 (mmap) / 240 (MCU 빌드) msgs/s | 🟢실측 | `make prior-rss` (타이머=인코드 루프) |
-| 디코드 전용 속도 (msgs/s, MB/s) | — | ⚫미측정 | `prior-rss`는 인코드만 측정 |
+| **텍스트형 + landmark prior** (권장 짝) | mqtt 6.0× · http 10.6× · log 4.9× · rpc 6.0× | mqtt ~1,000 · http ~2,200 · log ~960 · rpc ~1,120 | 🟢실측 |
+| 텍스트형 + base prior (landmark 없음) | mqtt 5.1× · http 7.0× · log 4.3× · rpc 5.0× | mqtt ~620 · http ~730 · log ~560 · rpc ~470 (landmark 의 ~0.5–0.6×) | 🟢실측 |
+| **레코드형 + schema prior** (권장 짝) | binary 0.99× · iot 1.24× · modbus 6.7× · canbus 4.3× | binary ~29k · iot ~30k · modbus ~38k · canbus ~42k | 🟢실측 |
+| 디코드 @128B | ≈인코드와 대칭 (같은 분포 계산이 병목) | ≈인코드 | 🟢실측 |
+| 다중 스레드 | — | per-instance, 선형 확장 (8스레드 ≈ 8×) | ⚪소스확인 (`make threads-test`) |
+
+> **측정 주의 (정직히):**
+> - **레코드형 데이터는 schema prior 로 측정해야 한다.** structural codec 은 자리별 사전계산 cum 만
+>   읽어(BT 분포 탐색 없음) **텍스트/landmark 경로의 ~30×** 인 30k–42k msgs/s 를 낸다. 같은 iot
+>   데이터를 landmark prior 로 재면 context 가 안 맞아 ~300 msgs/s 로 떨어진다 — 짝이 틀린 측정이다.
+>   (이전 spec 의 "iot 959 msgs/s landmark" 는 이 짝 오류였고 재현되지 않아 정정한다.)
+> - structural 의 빠른 속도는 **압축비를 희생**한 결과일 수 있다(iot 1.24× vs 같은 데이터 landmark
+>   1.99×). 속도냐 압축비냐는 데이터·요구사항에 따라 고른다.
+> - 텍스트/landmark 경로(바이트마다 256-심볼 BT 분포 계산)는 LZ(brotli/zstd, µs)보다 **100×+ 느리다.**
+>   강점은 속도가 아니라 작은 패킷 압축비·풋프린트다. 엣지 텔레메트리(초당 수백~수천 패킷/코어)엔
+>   충분하나 고throughput 스트리밍엔 부적합.
+> - btv3 분포 핫패스 최적화(미관측 byte 기여를 레벨당 1회 계산)로 텍스트/landmark 경로가 **bit-identical
+>   하게 ~1.4–2.9× 빨라졌다**(시나리오별, `make prior-equiv` 무손실·바이트동일 확인).
 
 ## 7. 스레드 안전성 / 무결성
 
@@ -88,9 +110,11 @@
 - 라이브러리 static **59 KB** / shared **49.8 KB** / MCU 코어 .text **26.9 KB**
 - 외부 의존성 **libc 만 (libm 0, 서드파티 0)**
 - per-instance 스레드 안전, CRC32 기본 on
+- **압축비**(머신 무관 재현): 텍스트형 landmark mqtt 6.0× / http 10.6×, 레코드형 schema modbus 6.7× / canbus 4.3×
 
-## 공개 자료에 쓰면 안 되는 것 (미측정)
+## 공개 자료에 쓰면 안 되는 것 (미측정/주의)
 
-- 디코드 **전용** 속도 (측정된 건 인코드 처리량)
+- **절대 msgs/s 를 머신 명시 없이** 쓰지 말 것 (CI 러너 부하에 ±15% 변동; 압축비는 재현됨)
+- 데이터-기능 짝이 틀린 속도 (예: 레코드 데이터를 landmark 로 잰 값)
 - ARM / 실제 MCU 칩 동작
 - `.dll`/`.dylib` 바이트 크기, ARM codegen `.text`
