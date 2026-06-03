@@ -116,6 +116,12 @@ void          bcb_codec_set_sdelta(BcbCodec *c, int on);    /* enable fast path 
 unsigned char bcb_codec_enc_xform(const BcbCodec *c, unsigned char b); /* real byte → coded symbol */
 unsigned char bcb_codec_dec_last(const BcbCodec *c);        /* reconstructed real byte after a decode step */
 
+/* ── distribution-cache instrumentation ─────────────────────────────────────
+ * Cumulative memoized-BT-distribution hits/misses for this codec (the BT miss
+ * path; landmark/structural bypass the cache). Pure instrumentation — reports
+ * 0/0 under -DBCB_NO_DISTCACHE. Output is bit-identical regardless of the cache. */
+void bcb_codec_distcache_stats(const BcbCodec *c, size_t *hits, size_t *misses);
+
 /* prior 가 record schema 를 가지면 record_size(>0), 없으면 0. */
 BCB_API int bcb_prior_record_size(const BcbPrior *p);
 

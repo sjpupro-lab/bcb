@@ -561,6 +561,38 @@ CecBT bcb_prior_cec_bt(BcbPrior *p) {
     return bt;
 }
 
+/* ── BT distribution memoization cache (per-instance, thread-safe) ───────────
+ * The BT miss path (bt_v3_distribution_r) recomputes a 256-symbol distribution
+ * from the active contexts for every byte. With a frozen prior that recompute is
+ * a *pure function* of (context window, scale): the same window always yields the
+ * same cum (train only slides the window; it never mutates the prior). So
+ * memoizing window→cum is bit-identical — a hit returns exactly what the recompute
+ * would have produced, and a full-key compare on every hit means a hash collision
+ * can never return a wrong cum (it just recomputes). This is the opposite
+ * trade-off from a lossy speedup: zero ratio change by construction. ★This is the
+ * whole reason the optimization exists. Landmark hits (precomputed cum) and the
+ * structural path bypass this entirely; only the BT miss path is cached.
+ * -DBCB_NO_DISTCACHE compiles the cache out completely (no struct fields, no
+ * lookup, byte-identical output, no memory growth) for MCU/flash-tight targets. */
+#ifndef BCB_NO_DISTCACHE
+#ifndef BCB_DISTCACHE_SLOTS
+#define BCB_DISTCACHE_SLOTS 512u          /* power of two; direct-mapped (1-way) */
+#endif
+typedef struct {
+    uint32_t      cum[257];               /* memoized distribution (the value) */
+    uint32_t      gen;                     /* generation tag → O(1) per-message clear */
+    uint32_t      scale;                   /* key part (always CEC_RC_SCALE in practice) */
+    unsigned char win[BCB_BT_MAX_DEPTH];  /* key: context window contents */
+    unsigned char win_len;                /* key: window length (0..BCB_BT_MAX_DEPTH) */
+} BcbDistEntry;
+static inline uint32_t distcache_hash(const unsigned char *win, int win_len, uint32_t scale) {
+    uint32_t h = 2166136261u;             /* FNV-1a over window bytes + scale */
+    for (int i = 0; i < win_len; i++) { h ^= win[i]; h *= 16777619u; }
+    h ^= scale; h *= 16777619u;
+    return h;
+}
+#endif
+
 /* ── per-instance codec (thread-safe; 전역 미사용) ───────────── */
 struct BcbCodec {
     BcbPrior *p;
@@ -580,6 +612,11 @@ struct BcbCodec {
 #endif
     BtV3Scratch scratch;      /* 분포 계산 작업 버퍼 (per-instance → 스레드 안전,
                                * 해제 스택을 1KB 대로 낮춘다). rd.scratch 가 가리킴. */
+#ifndef BCB_NO_DISTCACHE
+    BcbDistEntry *distcache;  /* BCB_DISTCACHE_SLOTS entries; NULL unless mode==0 */
+    uint32_t      dc_gen;     /* current generation; bcb_codec_begin() bumps it (cheap clear) */
+    size_t        dc_hits, dc_misses;  /* cumulative stats (instrumentation; not reset per msg) */
+#endif
 };
 
 /* Build the per-position prev-independent cum table once (frozen prior → fixed).
@@ -652,6 +689,27 @@ static void codec_dist(uint32_t *cum, uint32_t scale, void *user) {
             if (acc == scale) return;
         }
     }
+    /* BT miss path — memoize window→cum (bit-identical; see BcbDistEntry note). */
+#ifndef BCB_NO_DISTCACHE
+    if (c->distcache) {
+        const unsigned char *win = c->rd.window;
+        int wl = c->rd.win_len;
+        uint32_t slot = distcache_hash(win, wl, scale) & (BCB_DISTCACHE_SLOTS - 1u);
+        BcbDistEntry *e = &c->distcache[slot];
+        if (e->gen == c->dc_gen && e->scale == scale &&
+            e->win_len == (unsigned char)wl && memcmp(e->win, win, (size_t)wl) == 0) {
+            memcpy(cum, e->cum, 257 * sizeof(uint32_t));   /* hit: exact recompute */
+            c->dc_hits++;
+            return;
+        }
+        bt_v3_distribution_r(&c->rd, cum, scale);
+        memcpy(e->cum, cum, 257 * sizeof(uint32_t));       /* miss: fill slot (1-way replace) */
+        memcpy(e->win, win, (size_t)wl);
+        e->win_len = (unsigned char)wl; e->scale = scale; e->gen = c->dc_gen;
+        c->dc_misses++;
+        return;
+    }
+#endif
     bt_v3_distribution_r(&c->rd, cum, scale);
 }
 
@@ -699,6 +757,14 @@ BcbCodec *bcb_codec_new(BcbPrior *p) {
         c->rd.bloom = (const unsigned char *)p->snap.bloom;
         c->rd.ctx_mask = p->snap.ctx_nslots ? p->snap.ctx_nslots - 1 : 0;
         c->rd.scratch = &c->scratch;   /* per-instance 작업 버퍼 (스레드 안전) */
+#ifndef BCB_NO_DISTCACHE
+        /* Cache the BT miss path only (mode 0). NULL on OOM is fine — codec_dist
+         * falls back to a plain recompute, so correctness never depends on it.
+         * dc_gen starts at 1 so the calloc'd entries (gen==0) read as empty until
+         * first written; the warm default never bumps it (it doubles as a used-bit). */
+        c->distcache = (BcbDistEntry *)calloc(BCB_DISTCACHE_SLOTS, sizeof(BcbDistEntry));
+        c->dc_gen = 1;
+#endif
     }
     bcb_codec_begin(c);
     return c;
@@ -707,13 +773,31 @@ BcbCodec *bcb_codec_new(BcbPrior *p) {
 void bcb_codec_begin(BcbCodec *c) {
     if (!c) return;
     if (c->mode == 1) { c->sc_pos = 0; memset(c->sc_prev, 0, sizeof c->sc_prev); memset(c->sc_cur, 0, sizeof c->sc_cur); }
-    else bt_v3_reader_reset_window(&c->rd);
+    else {
+        bt_v3_reader_reset_window(&c->rd);
+#if !defined(BCB_NO_DISTCACHE) && defined(BCB_DISTCACHE_PER_MSG_CLEAR)
+        /* Strict per-message clear (opt-in). The window resets identically at every
+         * message start, so a frozen prior gives the same window→cum mapping across
+         * messages — keeping the cache warm (the default) is therefore bit-identical
+         * AND is where the speedup comes from (window keys recur across messages, not
+         * within one ≤512B message). This opt-in instead bumps the generation so all
+         * prior entries read as stale: O(1) clear, strict message independence, but
+         * it throws away nearly all the hits. Build with it only if you need it. */
+        if (++c->dc_gen == 0) {                /* generation wrap (after 2^32 messages) */
+            if (c->distcache) memset(c->distcache, 0, BCB_DISTCACHE_SLOTS * sizeof(BcbDistEntry));
+            c->dc_gen = 1;
+        }
+#endif
+    }
 }
 
 void bcb_codec_free(BcbCodec *c) {
     if (!c) return;
 #ifndef BCB_SDELTA_NO_PRECOMPUTE
     free(c->sc_cum_pre);
+#endif
+#ifndef BCB_NO_DISTCACHE
+    free(c->distcache);
 #endif
     free(c);
 }
@@ -735,6 +819,19 @@ void bcb_codec_set_sdelta(BcbCodec *c, int on) {
 #endif
 }
 unsigned char bcb_codec_dec_last(const BcbCodec *c) { return c ? c->sc_last : 0; }
+
+/* Distribution-cache stats (cumulative over the codec's lifetime). Always present
+ * so callers compile regardless of the build; reports 0/0 when the cache is off. */
+void bcb_codec_distcache_stats(const BcbCodec *c, size_t *hits, size_t *misses) {
+#ifndef BCB_NO_DISTCACHE
+    if (hits)   *hits   = c ? c->dc_hits   : 0;
+    if (misses) *misses = c ? c->dc_misses : 0;
+#else
+    (void)c;
+    if (hits)   *hits   = 0;
+    if (misses) *misses = 0;
+#endif
+}
 
 /* Transform a real byte → coded symbol at the current position (no state change;
  * codec_train advances the position). delta pos: sym=(b-prev)&0xFF, byte pos: b. */
