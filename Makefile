@@ -43,7 +43,7 @@ MSG_SIZES ?= 64,128,256,512,1024,2048,4096
 MSG_BYTES ?= 400000
 MSG_SAMPLES ?= 24
 
-.PHONY: all test bench clean msgbench msgbench-md msgbench-landmark msgbench-check prior prior-equiv prior-rss hpack hpack-docs landmark landmark-verify landmark-bench landmark-bench-docs structbench structural-bench structural-verify api-test threads-test nodiv-test
+.PHONY: all test bench clean msgbench msgbench-md msgbench-landmark msgbench-check prior prior-equiv prior-rss hpack hpack-docs landmark landmark-verify landmark-bench landmark-bench-docs structbench structural-bench structural-verify api-test threads-test nodiv-test distcache-test distcache-bench
 
 all: $(BUILD)/bcb-cli $(BUILD)/bcb-bench
 
@@ -235,6 +235,41 @@ threads-test: $(BUILD)/test_threads $(BUILD)/bcb-prior-build $(BUILD)/corpus_mqt
 	@./$(BUILD)/bcb-prior-build $(BUILD)/corpus_binary_record.bin $(BUILD)/thr_sc.prior --train-size 49984 --schema-record-size 32 >/dev/null 2>&1
 	@echo "[landmark prior]"; ./$(BUILD)/test_threads $(BUILD)/thr_lm.prior $(BUILD)/corpus_mqtt_messages.bin 8 4000
 	@echo "[structural prior]"; ./$(BUILD)/test_threads $(BUILD)/thr_sc.prior $(BUILD)/corpus_binary_record.bin 8 4000
+
+# ── BT distribution cache (codec_dist memoization) ─────────────────────────────
+# distbench drives the per-instance codec path (the only caller of
+# bt_v3_distribution_r). Two builds: default (cache on) and -DBCB_NO_DISTCACHE
+# (cache out), so their --dump payloads can be cmp'd byte-for-byte.
+$(BUILD)/bcb-distbench: tools/bcb-distbench.c $(V0_SRC) $(V3_SRC) $(V5_SRC) | $(BUILD)
+	$(CC) $(CFLAGS) $(V0_INC) $(V3_INC) $(V5_INC) -o $@ $^ $(LDLIBS)
+
+$(BUILD)/bcb-distbench-nodc: tools/bcb-distbench.c $(V0_SRC) $(V3_SRC) $(V5_SRC) | $(BUILD)
+	$(CC) $(CFLAGS) -DBCB_NO_DISTCACHE $(V0_INC) $(V3_INC) $(V5_INC) -o $@ $^ $(LDLIBS)
+
+$(BUILD)/test_distcache: tests/test_distcache.c $(V0_SRC) $(V3_SRC) $(V5_SRC) | $(BUILD)
+	$(CC) $(CFLAGS) $(V0_INC) $(V3_INC) $(V5_INC) -o $@ $^ $(LDLIBS)
+
+# Unit test + cross-build bit-identical proof (cache on vs -DBCB_NO_DISTCACHE).
+distcache-test: $(BUILD)/test_distcache $(BUILD)/bcb-distbench $(BUILD)/bcb-distbench-nodc \
+                $(BUILD)/bcb-prior-build $(BUILD)/corpus_http_headers.bin
+	@./$(BUILD)/bcb-prior-build $(BUILD)/corpus_http_headers.bin $(BUILD)/dc.prior --train-size 50000 >/dev/null 2>&1
+	./$(BUILD)/test_distcache $(BUILD)/dc.prior $(BUILD)/corpus_http_headers.bin
+	@echo "[bit-identical: cache on vs off]"
+	@for s in $(SCENARIOS); do \
+	  ./$(BUILD)/bcb-prior-build $(BUILD)/corpus_$$s.bin $(BUILD)/dc_$$s.prior --train-size 50000 --landmark-k 256 >/dev/null 2>&1; \
+	  ./$(BUILD)/bcb-distbench      $(BUILD)/dc_$$s.prior $(BUILD)/corpus_$$s.bin --train-size 50000 --msg-size 128 --msgs 500 --reps 1 --dump $(BUILD)/dc_on.d  >/dev/null; \
+	  ./$(BUILD)/bcb-distbench-nodc $(BUILD)/dc_$$s.prior $(BUILD)/corpus_$$s.bin --train-size 50000 --msg-size 128 --msgs 500 --reps 1 --dump $(BUILD)/dc_off.d >/dev/null; \
+	  if cmp -s $(BUILD)/dc_on.d $(BUILD)/dc_off.d; then printf "  %-16s bit-identical=yes\n" $$s; else printf "  %-16s bit-identical=NO\n" $$s; exit 1; fi; \
+	done
+
+# Throughput + hit% sweep (cache on vs off) over all scenarios, landmark prior.
+distcache-bench: $(BUILD)/bcb-distbench $(BUILD)/bcb-distbench-nodc $(BUILD)/bcb-prior-build \
+                 $(addprefix $(BUILD)/corpus_,$(addsuffix .bin,$(SCENARIOS)))
+	@for s in $(SCENARIOS); do \
+	  ./$(BUILD)/bcb-prior-build $(BUILD)/corpus_$$s.bin $(BUILD)/dc_$$s.prior --train-size 50000 --landmark-k 256 >/dev/null 2>&1; \
+	  ./$(BUILD)/bcb-distbench      $(BUILD)/dc_$$s.prior $(BUILD)/corpus_$$s.bin --train-size 50000 --msg-size 128 --msgs 500 --reps 100; \
+	  ./$(BUILD)/bcb-distbench-nodc $(BUILD)/dc_$$s.prior $(BUILD)/corpus_$$s.bin --train-size 50000 --msg-size 128 --msgs 500 --reps 100; \
+	done
 
 # CI 용 빠른 structural round-trip 무손실 (작은 train)
 structural-verify: $(BUILD)/bcb-prior-build $(BUILD)/bcb-blockbench
