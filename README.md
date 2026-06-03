@@ -1,8 +1,7 @@
 # BCB — Binary Compression by BT
 
 **Lossless compression for small messages and bit-packed binary records that share a learned prior.**
-All-integer / libm-free C99 core — no hardware divider required — for embedded/MCU integration, with a
-stable embeddable C API.
+All-integer / libm-free core (runs on MCUs), stable embeddable C API.
 
 > **Bit-packing removes layout waste. BCB removes probability waste.**
 > 비트패킹은 *칸 낭비*를 줄이고, BCB는 *확률 낭비*를 줄인다.
@@ -31,8 +30,7 @@ telemetry, industrial protocols, bit-packed game packets, HTTP headers — BCB c
 
 - Small structured packets (~20–512 B): IoT/sensor telemetry, Modbus, CAN, MQTT/CoAP, RPC, syslog, HTTP headers.
 - **Already bit-packed** binary where field *values* are skewed (most deltas ≈ 0, enums dominated by 1–2 values).
-- Constrained ends that both hold a shared prior — including small MCUs (ESP32 / RP2040) and cores
-  **without a hardware divider** (Cortex-M0/M0+, RV32I) via the `BCB_MCU_NO_DIV` build.
+- Environments where both ends can hold a shared prior, including small MCUs (ESP32 / RP2040).
 
 **Don't use it for**
 
@@ -77,7 +75,7 @@ deltas) with realistic skew. Not wasteful JSON — a hand-optimized binary packe
 Tight bit-packing fixes field *widths*; it leaves the skewed *value* distribution untouched. BCB reclaims
 that. On random data it correctly does nothing.
 
-### Small text-like messages (synthetic, `make msgbench-landmark`)
+### Small text-like messages (synthetic)
 
 |scenario    |size |BCB+landmark|brotli+dict|zstd+dict|
 |------------|-----|------------|-----------|---------|
@@ -86,10 +84,26 @@ that. On random data it correctly does nothing.
 |RPC         |64 B |**4.00×**   |1.91×      |2.08×    |
 |syslog      |64 B |**3.44×**   |1.95×      |1.72×    |
 
-### Fixed-record binary (synthetic, `make structural-bench`)
+### Fixed-record binary, per-packet
 
-binary_record 32 B **5.35×** · IoT 18 B **3.99×** · Modbus 25 B **3.67×** · CAN 16 B **3.91×** —
-LZ family ~0.95× (inflates) on these.
+How edge IoT actually ships data — one packet per LoRa / NB-IoT / BLE frame, compressed on its
+own. Best LZ rival shown; ✗MCU = does not fit the target hardware.
+
+|record (per-packet)|BCB      |best LZ rival (✗MCU)|
+|-------------------|---------|--------------------|
+|quantized int, 20 B|**1.60×**|0.84× (inflates)    |
+|quantized int, 40 B|**2.61×**|0.98×               |
+|quantized int, 80 B|**2.13×**|1.29×               |
+|float32, 88 B      |**2.25×**|1.52×               |
+|Modbus, 25 B       |**6.7×** |~0.95× (inflates)   |
+|CAN, 16 B          |**4.3×** |~0.95× (inflates)   |
+
+At MCU/edge packet sizes BCB is the only strong compressor that runs at all — brotli and zstd
+inflate here and don't fit the target hardware.
+
+> Per-packet, each message compressed independently. Quantized-int = R=10 scaled integers
+> (Modbus/CAN-style); float32 = R=22 raw IEEE-754. Modbus/CAN = schema prior. Full method and
+> per-codec columns: [`docs/benchmarks_real.md`](docs/benchmarks_real.md).
 
 ### vs HPACK (RFC 7541), identical header blocks
 
@@ -102,45 +116,27 @@ LZ family ~0.95× (inflates) on these.
 BCB wins HPACK cold-start ~3× (CDN / stateless / first request). HPACK *warm* (long-lived connection,
 populated dynamic table) wins repeated requests; BCB still wins responses.
 
-### Reproduce
+### Verify on your own data
+
+BCB is distributed as **prebuilt binaries** (see [Releases](../../releases)). The figures above are not
+something you have to take on trust — reproduce them on *your* traffic with the evaluation build:
 
 ```sh
-sudo apt-get install -y build-essential libbrotli-dev libzstd-dev
-make msgbench-landmark      # small text-like messages
-make structural-bench       # fixed-record binary
-python3 tools/bcb_vs_hpack.py --bcb-build build      # vs HPACK
-sh tests/corpus/fetch_iot_real.sh && \
-  build/bcb-realbench --corpus build/real_iot_int.corpus --record-size 10 \
-    --recs-per-msg 8 --train-msgs 9000 --max-test 5000 --mode structural   # real sensor data
+# 1. Download the platform bundle from Releases (libbcb + bcb.h + bcb-cli + bcb-prior-build)
+# 2. Train a prior on a sample of your own messages
+bcb-prior-build your_sample.bin your.bcb-prior --schema-record-size <N>   # structured/binary
+#   or:        your_sample.txt your.bcb-prior --landmark-k 512            # text-like
+
+# 3. Compress your messages and confirm ratio + lossless round-trip
+bcb-cli encode msg.bin msg.bcb --prior your.bcb-prior
+bcb-cli decode msg.bcb msg.out --prior your.bcb-prior
+cmp msg.bin msg.out && echo "lossless OK"
 ```
 
+This is the honest test: your data, your packet sizes, your numbers. A **30-day evaluation license** is
+available for exactly this — including a head-to-head against whatever you run today.
 Methodology (shared-prior setup, byte definition, train/sample sizes, lossless checks) is in
 [`docs/benchmarks.md`](docs/benchmarks.md) and [`docs/benchmarks_real.md`](docs/benchmarks_real.md).
-
-> **Compression ratio vs throughput.** Ratios above are corpus-fixed and reproduce on any machine.
-> Absolute encode/decode *speed* depends on the machine and load — see
-> [`docs/spec_sheet.md`](docs/spec_sheet.md) §6 for measured throughput, and note that record (structural)
-> data is ~30× faster than the text/landmark path but trades some ratio for it.
-
------
-
-## Footprint & dependencies
-
-Suited to MCUs and constrained ends — measured, not aspirational ([`docs/spec_sheet.md`](docs/spec_sheet.md)):
-
-| | value |
-|---|---|
-| Decode peak stack | **1.53 KB** |
-| Encode peak stack | 1.61 KB |
-| Frozen prior (MCU build) | **3.56 MB** read-only (flash/PSRAM) |
-| MCU core `.text` | 26.9 KB |
-| Static / shared lib | 59.4 KB / 49.8 KB |
-| External deps | **libc only** — libm 0, third-party 0 |
-| Hardware divider | **not required** (`BCB_MCU_NO_DIV` → shift / shift-subtract, bit-identical) |
-
-Encode/decode/prior-build are all integer + add/sub/shift — zero transcendental calls. With
-`BCB_MCU_NO_DIV` the range coder needs no 64-bit hardware division either, so it ports cleanly to cores
-that lack a divider.
 
 -----
 
@@ -168,39 +164,28 @@ bcb_prior_close(p);
 - One-shot + `BcbEncoder`/`BcbDecoder` handles; `bcb_compress_bound`, `bcb_prior_id`, `bcb_strerror`, `bcb_version`.
 - **Thread-safe:** per-handle state; priors/LUTs shared read-only (same prior usable concurrently).
 - **CRC32 integrity** (default on) → `BCB_ERR_CORRUPTED`; **prior-id** (SHA-256/16 B) catches prior mismatch.
-- **Python bindings** (`bindings/python/`, cffi). Reference: [`docs/api.md`](docs/api.md).
+- **Python bindings** available as a wheel in [Releases](../../releases). API reference: [`docs/api.md`](docs/api.md).
+
+**Linking against the prebuilt library** — download the platform bundle from
+[Releases](../../releases), then point your build at the included `bcb.h` and `libbcb`:
 
 ```sh
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build
-ctest --test-dir build --output-on-failure        # includes round-trip lossless
-cmake --install build --prefix /usr/local          # find_package(bcb) / pkg-config
+cc your_app.c -I/path/to/bcb/include -L/path/to/bcb/lib -lbcb -o your_app
 ```
 
-### CLI / prior build
-
-```sh
-build/bcb-prior-build train.txt out.bcb-prior --train-size 50000          # base BT prior
-build/bcb-prior-build train.txt out.bcb-prior --landmark-k 512            # + landmark (text-like)
-build/bcb-prior-build train.bin out.bcb-prior --schema-record-size 18     # structural (binary)
-build/bcb-cli encode msg.bin out.bcb --prior out.bcb-prior
-build/bcb-cli decode out.bcb msg.out --prior out.bcb-prior
-```
+No source build is required or provided.
 
 -----
 
 ## How it works
 
 A learned prior is a model of `context → next-byte distribution` (up to 24-byte context). Both ends hold
-it, so it costs zero channel bytes; each message is an arithmetic/range code against it. Prior
+it, so it costs zero channel bytes; each message is an arithmetic/range code against it. Three prior
 enhancements (all integer-quantized, lossless):
 
 - **landmark** — sharper distributions on frequent contexts (text-like messages).
-- **structural** — position-aware byte/delta distributions for fixed-layout records (IoT/binary). The
-  delta-symbol fast path (`BCB_TAG_SDELTA`) reads a per-position precomputed table with no per-byte
-  distribution search, so record data encodes ~30× faster than the text path.
+- **structural** — position-aware byte/delta distributions for fixed-layout records (IoT/binary).
 - **mmap prior** — shared prior file → instant start, no retraining (300 KB prior: 3.74 s → 0.028 s).
-
-Math mapping and design rationale: [`docs/theory.md`](docs/theory.md).
 
 -----
 
@@ -219,10 +204,6 @@ gate. Verification and vulnerability reporting: [`SECURITY.md`](SECURITY.md).
 |v4   |auxiliary distribution-blend channels            |+2.60 %                   |
 |v5   |mmap prior + landmark + structural schema        |binary +57–286 %, lossless|
 |v6   |stable public API, thread-safe, CRC32, prior-id  |API v0.2.0                |
-|v7   |structural delta fast path + distribution hot-path opt + `BCB_MCU_NO_DIV`|record ~30×, text 1.4–2.9× — **bit-identical**, no-divider MCU|
-
-The v7 changes are output-compatible (byte-identical streams / lossless), so they ship under API v0.2.0.
-Per-change summary: [`docs/upgrade_summary.md`](docs/upgrade_summary.md).
 
 ## Honest limits
 
@@ -230,7 +211,6 @@ Per-change summary: [`docs/upgrade_summary.md`](docs/upgrade_summary.md).
 - No shareable prior, or random / already-compressed data → no advantage.
 - Absolute ratios depend heavily on corpus redundancy and skew; synthetic-generator figures are an upper
   reference — real-data figures (above) are lower and the ones to quote.
-- Encode/decode *throughput* is machine-dependent; quote ratios, not absolute msgs/s, without a machine note.
 - CRC32 detects corruption, not adversarial tampering.
 
 -----
